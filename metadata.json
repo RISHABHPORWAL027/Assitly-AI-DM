@@ -1,0 +1,6 @@
+{
+  "name": "AssistlyDM",
+  "description": "Automate your Instagram DMs, collect contact info, manage FAQs, and configure AI auto-replies in minutes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
