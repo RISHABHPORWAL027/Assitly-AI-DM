@@ -1,5 +1,5 @@
 import type { Contact } from '../types';
-import { postJson, type AuthHeaders } from './apiClient';
+import { postJson, getJson, type AuthHeaders } from './apiClient';
 
 export interface ContactStats {
   total: number;
@@ -16,7 +16,7 @@ export async function deleteContact(headers: AuthHeaders, id: string): Promise<R
 }
 
 export async function fetchContactStats(headers: AuthHeaders): Promise<ContactStats | null> {
-  const res = await fetch('/api/contacts?stats=true', { headers });
+  const res = await getJson('/api/contacts?stats=true', headers);
   if (!res.ok) return null;
   const data = await res.json();
   if (typeof data?.total !== 'number') return null;

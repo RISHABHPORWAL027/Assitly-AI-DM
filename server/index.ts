@@ -632,7 +632,8 @@ async function clearLeadGateForUser(igAccountId: string, senderId: string) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+const allowedOrigin = process.env.VITE_FRONTEND_URL || "*";
+app.use(cors({ origin: allowedOrigin, credentials: true }));
 
 app.post(
   '/api/billing/webhook',
