@@ -11,25 +11,29 @@ import {
   Trash2, 
   Edit, 
   Check, 
-  Filter, 
-  Info,
-  X,
-  AlertCircle
+  X
 } from 'lucide-react';
 import { FAQ, BusinessProfile } from '../types';
+import TablePagination from './TablePagination';
+import { usePagination } from '../hooks/usePagination';
+import { DashboardHero } from './ui/DashboardHero';
+import { Card } from './ui/Card';
+import { Button } from './ui/Button';
 
 interface FAQSettingsViewProps {
   businessProfile: BusinessProfile;
   faqs: FAQ[];
   onUpdateProfile: (updated: BusinessProfile) => void;
-  onUpdateFAQs: (updated: FAQ[]) => void;
+  onSaveFAQ: (faq: FAQ) => void;
+  onDeleteFAQ: (id: string) => void;
 }
 
 export default function FAQSettingsView({
   businessProfile,
   faqs,
   onUpdateProfile,
-  onUpdateFAQs
+  onSaveFAQ,
+  onDeleteFAQ
 }: FAQSettingsViewProps) {
   const [profileForm, setProfileForm] = useState<BusinessProfile>(businessProfile);
   const [filterCategory, setFilterCategory] = useState<string>('All');
@@ -74,8 +78,7 @@ export default function FAQSettingsView({
 
   const handleDeleteFAQ = (id: string) => {
     if (confirm('Are you sure you want to delete this FAQ item?')) {
-      const updated = faqs.filter(f => f.id !== id);
-      onUpdateFAQs(updated);
+      onDeleteFAQ(id);
     }
   };
 
@@ -89,25 +92,21 @@ export default function FAQSettingsView({
       .filter(t => t.length > 0);
 
     if (editingFAQ) {
-      // Edit existing
-      const updated = faqs.map(f => f.id === editingFAQ.id ? {
-        ...f,
+      onSaveFAQ({
+        ...editingFAQ,
         question: faqQuestion,
         answer: faqAnswer,
         category: faqCategory,
-        tags: parsedTags
-      } : f);
-      onUpdateFAQs(updated);
+        tags: parsedTags,
+      });
     } else {
-      // Add new
-      const newFaq: FAQ = {
+      onSaveFAQ({
         id: 'faq_' + Date.now(),
         question: faqQuestion,
         answer: faqAnswer,
         category: faqCategory,
-        tags: parsedTags
-      };
-      onUpdateFAQs([...faqs, newFaq]);
+        tags: parsedTags,
+      });
     }
     setShowAddModal(false);
   };
@@ -120,43 +119,49 @@ export default function FAQSettingsView({
     ? faqs 
     : faqs.filter(f => f.category === filterCategory);
 
-  return (
-    <div className="space-y-8 text-left pb-16" id="faq-settings-container">
-      {/* Top Header with Interactive Toggle Status (Screen 5) */}
-      <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-        <div className="text-left">
-          <h2 className="font-display font-extrabold text-2xl md:text-3xl text-on-surface">
-            Automation Configuration
-          </h2>
-          <p className="font-sans text-sm text-on-surface-variant mt-0.5">
-            Manage your business profile and automated AI triggers.
-          </p>
-        </div>
+  const {
+    page,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalCount: faqTotal,
+    paginatedItems: pageFaqs,
+  } = usePagination(filteredFaqs, {
+    resetKey: filterCategory,
+  });
 
-        {/* Global Toggle Box Component */}
-        <div className="flex items-center gap-3 bg-white p-3 rounded-xl shadow-sm border border-outline-variant/30 shrink-0">
-          <span className="font-sans font-bold text-xs text-on-surface">AUTOMATION ENGINE STATUS</span>
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input 
-              type="checkbox" 
-              checked={profileForm.statusOn} 
-              onChange={handleToggleStatus}
-              className="sr-only peer" 
-            />
-            <div className="w-11 h-6 bg-outline-variant peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-success-whatsapp after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-          </label>
-          <span className={`font-sans font-extrabold text-xs uppercase tracking-wider ${profileForm.statusOn ? 'text-success-whatsapp' : 'text-error'}`}>
-            {profileForm.statusOn ? 'Active ON' : 'Paused OFF'}
-          </span>
-        </div>
-      </header>
+  return (
+    <div className="space-y-8 text-left pb-16 relative z-10" id="faq-settings-container">
+      <DashboardHero
+        badge="Knowledge base"
+        title="Automation Configuration"
+        subtitle="Train your business profile and FAQ library so automations answer like you — accurate, fast, on-brand."
+        imageUrl="https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=900&q=80"
+        action={
+          <div className="flex items-center gap-3 card-surface px-4 py-3">
+            <span className="font-sans font-bold text-xs text-on-surface">Automation engine</span>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={profileForm.statusOn}
+                onChange={handleToggleStatus}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-outline-variant rounded-full peer peer-checked:bg-success-whatsapp after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+            </label>
+            <span className={`font-sans font-extrabold text-xs uppercase ${profileForm.statusOn ? 'text-success-whatsapp' : 'text-outline'}`}>
+              {profileForm.statusOn ? 'Active' : 'Paused'}
+            </span>
+          </div>
+        }
+      />
 
       {/* Bento Grid layout represent Section 1 and 2 from Screen 5 */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         
         {/* Left Side: Business Information form */}
         <div className="col-span-12 lg:col-span-7 space-y-8">
-          <div className="bg-white p-6 rounded-2xl border border-outline-variant/30 shadow-sm">
+          <Card>
             <div className="flex items-center gap-2 mb-6 border-b border-outline-variant/20 pb-4">
               <Building className="w-5 h-5 text-primary" />
               <h3 className="font-display font-bold text-lg text-on-surface text-left">Your Store Profile</h3>
@@ -230,32 +235,35 @@ export default function FAQSettingsView({
               <div className="pt-2 text-left">
                 <button 
                   type="submit" 
-                  className="bg-primary text-white px-6 py-3 rounded-xl font-sans font-bold text-sm hover:shadow-lg active:scale-95 transition-all cursor-pointer"
+                  className="btn-primary"
                 >
                   Save Business Details
                 </button>
               </div>
             </form>
-          </div>
+          </Card>
 
-          {/* AI Model Health Card placeholder graphic */}
-          <div className="h-44 rounded-2xl overflow-hidden relative shadow-md bg-gradient-to-r from-primary via-primary-container to-secondary" id="ai-model-health-promo">
-            <div className="absolute inset-0 bg-black/10"></div>
-            <div className="absolute inset-0 bg-gradient-to-t from-primary/80 to-transparent flex flex-col justify-end p-6 text-white text-left">
+          <Card className="h-44 overflow-hidden relative bg-gradient-to-br from-primary via-[#0052b8] to-secondary p-0" padding="none" id="ai-model-health-promo">
+            <img
+              src="https://images.unsplash.com/photo-1677442136019-21780ecad995?auto=format&fit=crop&w=800&q=80"
+              alt=""
+              className="absolute inset-0 w-full h-full object-cover opacity-30 mix-blend-overlay"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-primary/90 via-primary/40 to-transparent flex flex-col justify-end p-6 text-white text-left">
               <span className="bg-white/20 text-white w-fit px-2.5 py-0.5 rounded-full font-sans text-[10px] uppercase font-extrabold mb-1">
                 Active Learning Syncing
               </span>
               <h4 className="font-display font-extrabold text-lg">AI Model Context Health</h4>
               <p className="font-sans text-xs opacity-90 mt-0.5">
-                Our model auto-updates training based on your business profile details above. Currently resolved 42 positive conversions.
+                Keep your profile and FAQs updated — automations use this context to answer customers accurately.
               </p>
             </div>
-          </div>
+          </Card>
         </div>
 
         {/* Right Side: FAQ Library Pane list */}
         <div className="col-span-12 lg:col-span-5 space-y-6">
-          <div className="bg-white shadow-sm rounded-2xl border border-outline-variant/30 flex flex-col overflow-hidden">
+          <Card padding="none" className="flex flex-col overflow-hidden">
             <div className="p-4 bg-surface-container-low flex justify-between items-center border-b border-outline-variant/30">
               <div className="flex items-center gap-2">
                 <HelpCircle className="w-5 h-5 text-primary" />
@@ -278,12 +286,12 @@ export default function FAQSettingsView({
             </div>
 
             <div className="divide-y divide-outline-variant/30 max-h-[440px] overflow-y-auto custom-scrollbar">
-              {filteredFaqs.length === 0 ? (
+              {pageFaqs.length === 0 ? (
                 <div className="p-8 text-center text-outline font-sans text-sm">
                   No FAQ items matched the filter category.
                 </div>
               ) : (
-                filteredFaqs.map((faq) => (
+                pageFaqs.map((faq) => (
                   <div key={faq.id} className="p-4 hover:bg-surface-container-low/40 transition-colors group relative text-left">
                     <div className="flex justify-between items-start mb-1.5">
                       <span className={`text-[9px] uppercase font-sans font-extrabold px-2 py-0.5 rounded-full border ${
@@ -335,6 +343,16 @@ export default function FAQSettingsView({
               )}
             </div>
 
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              totalCount={faqTotal}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              itemLabel="FAQs"
+              className="bg-surface-container-low border-outline-variant/30"
+            />
+
             {/* Step Add new action standard button */}
             <div className="p-4 bg-surface-bright text-center border-t border-outline-variant/20">
               <button 
@@ -344,25 +362,23 @@ export default function FAQSettingsView({
                 <Plus className="w-4 h-4" /> Add New FAQ Item
               </button>
             </div>
-          </div>
+          </Card>
 
-          {/* AI Suggestion recommendation card box */}
-          <div className="bg-primary-container text-white p-5 rounded-2xl flex gap-3 items-start shadow-sm text-left">
+          <Card className="bg-gradient-to-br from-primary to-[#0052b8] text-white flex gap-3 items-start">
             <Sparkles className="w-5 h-5 shrink-0 text-white mt-0.5 fill-white" />
             <div>
-              <h5 className="font-sans font-bold text-xs uppercase tracking-wide">AI Recommendation Suggestion</h5>
+              <h5 className="font-sans font-bold text-xs uppercase tracking-wide">FAQ tip</h5>
               <p className="font-sans text-xs opacity-90 mt-1 leading-relaxed">
-                We've auto-detected several customer inquiries asking about "Vegan Options" and "Discount Codes". Consider adding an FAQ answering those to increase click-throughs!
+                Add FAQs for topics customers ask about often (hours, pricing, shipping). They help your automations answer faster and capture more leads.
               </p>
             </div>
-          </div>
+          </Card>
         </div>
       </div>
 
-      {/* Elegant Floating Action Button (FAB) in bottom right corner */}
       <button 
         onClick={handleOpenAddModal}
-        className="fixed bottom-6 right-6 w-14 h-14 bg-primary text-white rounded-full flex items-center justify-center shadow-lg shadow-primary/30 hover:scale-110 active:scale-95 transition-all z-40 cursor-pointer"
+        className="fixed bottom-6 right-6 w-14 h-14 btn-primary rounded-full shadow-lg z-40"
         title="Quick Add FAQ"
       >
         <Plus className="w-6 h-6" />

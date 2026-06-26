@@ -1,74 +1,70 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Sparkles, 
-  Bot, 
-  Home, 
   Zap, 
   Settings, 
   Users, 
-  CreditCard, 
-  Instagram, 
   LogOut, 
-  ExternalLink,
-  ShieldAlert,
-  BookOpen,
-  HelpCircle,
-  Menu,
-  X
+  Lock,
+  ChevronLeft,
+  ChevronRight,
+  Link2
 } from 'lucide-react';
 
-import { ScreenType, FAQ, Contact, AutomationSettings, BusinessProfile, Activity } from './types';
+import { ScreenType, FAQ, Contact, BusinessProfile, Automation } from './types';
 import HeroLandingView from './components/HeroLandingView';
-import OnboardingStep1 from './components/OnboardingStep1';
+import { ContactPage, FaqPage, PrivacyPolicyPage, TermsPage } from './components/StaticPages';
+import { PUBLIC_SCREENS } from './lib/siteLinks';
+import AutomationsListView from './components/AutomationsListView';
 import AutomationBuilderView from './components/AutomationBuilderView';
 import FAQSettingsView from './components/FAQSettingsView';
 import ContactsView from './components/ContactsView';
-import PricingView from './components/PricingView';
-import DashboardView from './components/DashboardView';
+import SettingsView from './components/SettingsView';
+import ConnectCelebration from './components/ConnectCelebration';
+import WorkspaceShell from './components/WorkspaceShell';
+import { saveAutomation, deleteAutomation } from './lib/automationsApi';
+import { saveFAQ, deleteFAQ } from './lib/faqsApi';
+import { saveContact, deleteContact } from './lib/contactsApi';
+import { saveBusinessProfile } from './lib/profileApi';
+import { initMetaSdk, connectInstagramViaMeta } from './lib/connectInstagram';
+import { fetchBillingStatus, createSubscriptionCheckout } from './lib/billingApi';
+import { openRazorpaySubscriptionCheckout } from './lib/razorpayCheckout';
+import { normalizeStoredPlan, type BillablePlan, type UserPlan } from './lib/plans';
+import { useAuth } from './context/AuthContext';
+import { auth } from './lib/firebase';
 
 // Default initial payloads
 const defaultBusinessProfile: BusinessProfile = {
-  name: "Chef Sarah's Cafe",
-  email: "sarah@chefscafe.com",
-  address: "123 Artisan Way, San Francisco, CA",
-  hoursWeekdays: "8:00 AM - 8:00 PM",
-  hoursWeekends: "10:00 AM - 6:00 PM",
+  name: "",
+  email: "",
+  address: "",
+  hoursWeekdays: "",
+  hoursWeekends: "",
   statusOn: true
 };
 
-const defaultAutomation: AutomationSettings = {
-  triggerType: 'Instagram DM',
-  triggerKeywords: ['hey', 'hello', 'hi', 'greetings', 'pricing', 'hours'],
-  messageText: 'Hey there! 🍰 Welcome to {company_name}! We answers pricing, location and store hours automatically. Ask us anything, or check menu prices!',
-  isLive: true
-};
+const defaultFAQs: FAQ[] = [];
+const defaultContacts: Contact[] = [];
 
-const defaultFAQs: FAQ[] = [
-  { id: 'faq_1', question: 'How much are your custom cakes?', answer: 'Our custom celebration cakes start at $45 and vary based on layers and flavors. DM us your design style and scale for a detailed rate!', category: 'Pricing', tags: ['cakes', 'bakes', 'rates'] },
-  { id: 'faq_2', question: 'Where can I find your cafe?', answer: 'We are located at 123 Artisan Way in San Francisco! Look for the large blue awning next to the contemporary gallery.', category: 'Location', tags: ['address', 'hours', 'direction'] },
-  { id: 'faq_3', question: 'Do you offer local shipping / delivery?', answer: 'Yes! We offer flat-rate $10 local delivery inside San Francisco. Pick up is always available free of charge during hours.', category: 'Shipping', tags: ['delivery', 'fees', 'pickup'] },
-  { id: 'faq_4', question: 'Do you have vegan allergen options?', answer: 'We bake fresh vegan gluten-free cookies and almond-milk chocolate cupcakes daily. Ask a barista to hold yours!', category: 'General', tags: ['vegan', 'gluten-free', 'allergies'] }
-];
+const WORKSPACE_SCREENS: ScreenType[] = ['automations', 'automation_builder', 'faq_settings', 'contacts', 'settings'];
 
-const defaultContacts: Contact[] = [
-  { id: 'lead_1', username: 'johndoe_design', phone: '+1 (555) 0192', email: 'john.d@design.co', dateAdded: 'Today', source: 'Instagram' },
-  { id: 'lead_2', username: 'stylist_mia', phone: '+1 (555) 0392', email: 'mia@stylist.co', dateAdded: 'Yesterday', source: 'Automation' },
-  { id: 'lead_3', username: 'coffee_roasters', phone: '+1 (555) 7821', email: 'beans@roasters.com', dateAdded: '2 days ago', source: 'Automation' },
-  { id: 'lead_4', username: 'alex_ventur', phone: '+1 (555) 9021', email: 'alex@ventures.com', dateAdded: 'Oct 20, 2023', source: 'Instagram' }
-];
+/** Set when user explicitly disconnects — blocks dev sandbox auto-reconnect */
+const IG_MANUAL_DISCONNECT_KEY = 'assistly_ig_manual_disconnect';
 
-const defaultActivities: Activity[] = [
-  { id: 'act_1', username: 'johndoe_design', timestamp: '2m ago', action: 'Asked about pricing plans for birthday bakes', type: 'chat_bubble' },
-  { id: 'act_2', username: 'stylist_mia', timestamp: '15m ago', action: 'Left phone number via lead capture prompt', type: 'call' },
-  { id: 'act_3', username: 'coffee_roasters', timestamp: '1h ago', action: 'Triggered store timings automated response', type: 'person' },
-  { id: 'act_4', username: 'alex_ventur', timestamp: '3h ago', action: 'Sent unknown request requiring Human Help', type: 'flag' }
-];
+function normalizeScreenHash(hash: string): ScreenType {
+  if (hash === 'dashboard' || hash === 'onboarding1') return 'automations';
+  const validScreens: ScreenType[] = [...PUBLIC_SCREENS as unknown as ScreenType[], ...WORKSPACE_SCREENS];
+  if (validScreens.includes(hash as ScreenType)) {
+    return hash as ScreenType;
+  }
+  return 'landing';
+}
 
 export default function App() {
+  const { user, loading, loginWithGoogle, logout, getAuthHeaders } = useAuth();
+  
   // Navigation screen router
-  const [screen, setScreen] = useState<ScreenType>('landing');
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [screen, setScreen] = useState<ScreenType>(() => normalizeScreenHash(window.location.hash.replace('#', '')));
 
   // States with LocalPersistence initializer
   const [profile, setProfile] = useState<BusinessProfile>(() => {
@@ -76,10 +72,15 @@ export default function App() {
     return saved ? JSON.parse(saved) : defaultBusinessProfile;
   });
 
-  const [automation, setAutomation] = useState<AutomationSettings>(() => {
-    const saved = localStorage.getItem('assistly_automation');
-    return saved ? JSON.parse(saved) : defaultAutomation;
+  const [automations, setAutomations] = useState<Automation[]>(() => {
+    const saved = localStorage.getItem('assistly_automations');
+    return saved ? JSON.parse(saved) : [];
   });
+
+  const [selectedAutomation, setSelectedAutomation] = useState<Automation | null>(null);
+  const [automationListRefreshKey, setAutomationListRefreshKey] = useState(0);
+
+  const bumpAutomationListRefresh = () => setAutomationListRefreshKey((k) => k + 1);
 
   const [faqs, setFaqs] = useState<FAQ[]>(() => {
     const saved = localStorage.getItem('assistly_faqs');
@@ -91,25 +92,68 @@ export default function App() {
     return saved ? JSON.parse(saved) : defaultContacts;
   });
 
-  const [activities, setActivities] = useState<Activity[]>(defaultActivities);
   const [isInstagramConnected, setIsInstagramConnected] = useState<boolean>(() => {
     const saved = localStorage.getItem('assistly_ig_link');
-    return saved ? JSON.parse(saved) : true; // default linked for Sarah showcase
+    return saved ? JSON.parse(saved) : false; // default to false so users connect it
   });
 
-  const [currentPlan, setCurrentPlan] = useState<'Free' | 'Starter' | 'Growth'>(() => {
-    const saved = localStorage.getItem('assistly_plan');
-    return saved ? JSON.parse(saved) : 'Starter';
+  const [instagramAccountId, setInstagramAccountId] = useState<string>(() => {
+    return localStorage.getItem('assistly_ig_account_id') || '';
   });
+
+  const [instagramAccountName, setInstagramAccountName] = useState<string>(() => {
+    return localStorage.getItem('assistly_ig_account_name') || '';
+  });
+
+  const [instagramUsername, setInstagramUsername] = useState<string>(() => {
+    return localStorage.getItem('assistly_ig_username') || '';
+  });
+
+  const [instagramProfilePic, setInstagramProfilePic] = useState<string>(() => {
+    return localStorage.getItem('assistly_ig_profile_pic') || '';
+  });
+
+
+  const [currentPlan, setCurrentPlan] = useState<UserPlan>(() => {
+    const saved = localStorage.getItem('assistly_plan');
+    if (!saved) return 'Free';
+    try {
+      return normalizeStoredPlan(JSON.parse(saved));
+    } catch {
+      return normalizeStoredPlan(saved);
+    }
+  });
+
+  const [isSidebarMinimized, setIsSidebarMinimized] = useState<boolean>(() => {
+    const saved = localStorage.getItem('assistly_sidebar_minimized');
+    return saved ? JSON.parse(saved) : false;
+  });
+
+  const [isHeaderDropdownOpen, setIsHeaderDropdownOpen] = useState(false);
+
+  const [settingsTab, setSettingsTab] = useState<'general' | 'instagram' | 'billing'>('general');
+  const [connectingInstagram, setConnectingInstagram] = useState(false);
+  const [showConnectCelebration, setShowConnectCelebration] = useState(false);
+  const [celebrationDisplayName, setCelebrationDisplayName] = useState('');
+  const [createAutomationSignal, setCreateAutomationSignal] = useState(0);
+  const [billingBusy, setBillingBusy] = useState<BillablePlan | null>(null);
+
+  useEffect(() => {
+    initMetaSdk();
+  }, []);
 
   // Sync to local storage
+  useEffect(() => {
+    localStorage.setItem('assistly_sidebar_minimized', JSON.stringify(isSidebarMinimized));
+  }, [isSidebarMinimized]);
+
   useEffect(() => {
     localStorage.setItem('assistly_profile', JSON.stringify(profile));
   }, [profile]);
 
   useEffect(() => {
-    localStorage.setItem('assistly_automation', JSON.stringify(automation));
-  }, [automation]);
+    localStorage.setItem('assistly_automations', JSON.stringify(automations));
+  }, [automations]);
 
   useEffect(() => {
     localStorage.setItem('assistly_faqs', JSON.stringify(faqs));
@@ -127,316 +171,624 @@ export default function App() {
     localStorage.setItem('assistly_plan', JSON.stringify(currentPlan));
   }, [currentPlan]);
 
-  const handleUpdateProfile = (updated: BusinessProfile) => {
+  useEffect(() => {
+    localStorage.setItem('assistly_ig_username', instagramUsername);
+  }, [instagramUsername]);
+
+  useEffect(() => {
+    localStorage.setItem('assistly_ig_profile_pic', instagramProfilePic);
+  }, [instagramProfilePic]);
+
+  // Dev sandbox auto-connect — never in production builds
+  useEffect(() => {
+    if (import.meta.env.PROD) return;
+    if (!instagramAccountId) {
+      const manuallyDisconnected = localStorage.getItem(IG_MANUAL_DISCONNECT_KEY) === 'true';
+      if (manuallyDisconnected) {
+        return;
+      }
+
+      fetch('/api/auth/sandbox-config')
+        .then(res => res.json())
+        .then(data => {
+          if (data.enabled && data.igAccountId) {
+            console.log("Auto-connecting sandbox IG Account:", data.igAccountId);
+            handleConnectedStatusChange(
+              true,
+              data.igAccountId,
+              data.igAccountName,
+              data.username,
+              data.profilePictureUrl
+            );
+          }
+        })
+        .catch(err => console.error("Error checking sandbox config:", err));
+    }
+  }, [instagramAccountId]);
+
+  // Fetch all user-specific data from server when Instagram is connected
+  useEffect(() => {
+    if (!instagramAccountId) return;
+
+    const fetchAllData = async () => {
+      try {
+        const headers = await getAuthHeaders(instagramAccountId);
+
+        // Automations list is loaded via AutomationsListView (paginated)
+
+        // Fetch FAQs
+        const faqsRes = await fetch('/api/faqs', { headers });
+        if (faqsRes.ok) {
+          const data = await faqsRes.json();
+          if (Array.isArray(data)) setFaqs(data);
+        }
+
+        // Fetch Profile
+        const profileRes = await fetch('/api/business/profile', { headers });
+        if (profileRes.ok) {
+          const data = await profileRes.json();
+          if (data && typeof data === 'object') setProfile(data);
+        }
+
+        // Fetch Instagram Profile details
+        try {
+          const igProfileRes = await fetch('/api/instagram/profile', { headers });
+          if (igProfileRes.ok) {
+            const data = await igProfileRes.json();
+            if (data) {
+              if (data.username) setInstagramUsername(data.username);
+              if (data.name) setInstagramAccountName(data.name);
+              if (data.profile_picture_url) setInstagramProfilePic(data.profile_picture_url);
+            }
+          } else {
+            const errBody = await igProfileRes.json().catch(() => ({}));
+            console.error('Instagram profile fetch failed:', igProfileRes.status, errBody?.error || errBody);
+          }
+        } catch (e) {
+          console.error('Failed to load Instagram profile details:', e);
+        }
+
+        // Fetch Contacts & Activities
+        await fetchLiveFeed();
+      } catch (err) {
+        console.error('Failed to load user data from server:', err);
+      }
+    };
+
+    const fetchLiveFeed = async () => {
+      try {
+        const headers = await getAuthHeaders(instagramAccountId);
+
+        // Fetch Contacts
+        const contactsRes = await fetch('/api/contacts', { headers });
+        if (contactsRes.ok) {
+          const data = await contactsRes.json();
+          if (Array.isArray(data)) setContacts(data);
+        }
+      } catch (e) {
+        console.error('Failed to pull live contacts updates:', e);
+      }
+    };
+
+    fetchAllData();
+
+    // Poll contacts every 10s
+    const interval = setInterval(fetchLiveFeed, 10000);
+    return () => clearInterval(interval);
+  }, [instagramAccountId]);
+
+  // Synchronize screen state with URL hash
+  useEffect(() => {
+    window.location.hash = screen;
+  }, [screen]);
+
+  // Handle browser back/forward buttons
+  useEffect(() => {
+    const handleHashChange = () => {
+      setScreen(normalizeScreenHash(window.location.hash.replace('#', '')));
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  // Redirect to landing if not authenticated and trying to access workspace
+  useEffect(() => {
+    if (!loading && !user && !PUBLIC_SCREENS.includes(screen as (typeof PUBLIC_SCREENS)[number])) {
+      setScreen('landing');
+    }
+  }, [user, loading, screen]);
+
+  // Logged-in users go straight to the automations console (not the marketing landing page)
+  useEffect(() => {
+    if (!loading && user && screen === 'landing') {
+      setScreen('automations');
+    }
+  }, [user, loading, screen]);
+
+  // Sync subscription plan from server when authenticated
+  useEffect(() => {
+    if (!user || loading) return;
+
+    let cancelled = false;
+    getAuthHeaders(instagramAccountId || undefined)
+      .then((headers) => fetchBillingStatus(headers))
+      .then((data) => {
+        if (!cancelled) setCurrentPlan(normalizeStoredPlan(data.plan));
+      })
+      .catch((err) => console.warn('Billing status load failed:', err));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, loading, instagramAccountId]);
+
+  // Safety redirect: if accessing automation builder directly without a selected automation, redirect to automations list
+  useEffect(() => {
+    if (screen === 'automation_builder' && !selectedAutomation) {
+      setScreen('automations');
+    }
+  }, [screen, selectedAutomation]);
+
+  const handleUpdateProfile = async (updated: BusinessProfile) => {
     setProfile(updated);
-  };
-
-  const handleUpdateAutomation = (updated: AutomationSettings) => {
-    setAutomation(updated);
-  };
-
-  const handleUpdateFAQs = (updated: FAQ[]) => {
-    setFaqs(updated);
-  };
-
-  const handleUpdateContacts = (updated: Contact[]) => {
-    setContacts(updated);
-  };
-
-  const handleConnectedStatusChange = (status: boolean) => {
-    setIsInstagramConnected(status);
-    if (status) {
-      // Append a connection activity
-      const connAct: Activity = {
-        id: 'act_' + Date.now(),
-        username: 'meta_security',
-        timestamp: 'Just now',
-        action: 'Secure Meta Handshake Link Verified',
-        type: 'person'
-      };
-      setActivities([connAct, ...activities]);
+    if (!instagramAccountId) return;
+    try {
+      const headers = await getAuthHeaders(instagramAccountId);
+      const res = await saveBusinessProfile(headers, updated);
+      if (!res.ok) {
+        console.error('Failed to sync profile to server:', await res.text());
+      }
+    } catch (e) {
+      console.error('Failed to sync profile to server:', e);
     }
   };
 
-  const handleUpgradePlan = (plan: 'Starter' | 'Growth') => {
-    setCurrentPlan(plan);
+  const handleSaveFAQ = async (faq: FAQ) => {
+    setFaqs((prev) => {
+      const index = prev.findIndex((f) => f.id === faq.id);
+      if (index >= 0) {
+        return prev.map((f) => (f.id === faq.id ? faq : f));
+      }
+      return [...prev, faq];
+    });
+    if (!instagramAccountId) return;
+    try {
+      const headers = await getAuthHeaders(instagramAccountId);
+      const res = await saveFAQ(headers, faq);
+      if (!res.ok) {
+        console.error('Failed to save FAQ on server:', await res.text());
+      }
+    } catch (e) {
+      console.error('Failed to sync FAQ to server:', e);
+    }
   };
 
-  const handleSaveAutomationComplete = () => {
-    alert('Automation configuration saved and armed securely! Check the Interactive Simulator.');
-    setScreen('dashboard');
+  const handleDeleteFAQ = async (id: string) => {
+    setFaqs((prev) => prev.filter((f) => f.id !== id));
+    if (!instagramAccountId) return;
+    try {
+      const headers = await getAuthHeaders(instagramAccountId);
+      const res = await deleteFAQ(headers, id);
+      if (!res.ok) {
+        console.error('Failed to delete FAQ on server:', await res.text());
+      }
+    } catch (e) {
+      console.error('Failed to delete FAQ on server:', e);
+    }
+  };
+
+  const handleSaveContact = async (contact: Contact) => {
+    setContacts((prev) => {
+      const index = prev.findIndex((c) => c.id === contact.id);
+      if (index >= 0) {
+        return prev.map((c) => (c.id === contact.id ? contact : c));
+      }
+      return [contact, ...prev];
+    });
+    if (!instagramAccountId) return;
+    try {
+      const headers = await getAuthHeaders(instagramAccountId);
+      const res = await saveContact(headers, contact);
+      if (!res.ok) {
+        console.error('Failed to save contact on server:', await res.text());
+      }
+    } catch (e) {
+      console.error('Failed to sync contact to server:', e);
+    }
+  };
+
+  const handleDeleteContact = async (id: string) => {
+    setContacts((prev) => prev.filter((c) => c.id !== id));
+    if (!instagramAccountId) return;
+    try {
+      const headers = await getAuthHeaders(instagramAccountId);
+      const res = await deleteContact(headers, id);
+      if (!res.ok) {
+        console.error('Failed to delete contact on server:', await res.text());
+      }
+    } catch (e) {
+      console.error('Failed to delete contact on server:', e);
+    }
+  };
+
+  const handleConnectedStatusChange = (
+    status: boolean,
+    igId?: string,
+    igName?: string,
+    username?: string,
+    profilePic?: string
+  ) => {
+    setIsInstagramConnected(status);
+    if (status) {
+      localStorage.removeItem(IG_MANUAL_DISCONNECT_KEY);
+      if (igId) {
+        setInstagramAccountId(igId);
+        localStorage.setItem('assistly_ig_account_id', igId);
+      }
+      if (igName) {
+        setInstagramAccountName(igName);
+        localStorage.setItem('assistly_ig_account_name', igName);
+      }
+      if (username) {
+        setInstagramUsername(username);
+        localStorage.setItem('assistly_ig_username', username);
+      }
+      if (profilePic) {
+        setInstagramProfilePic(profilePic);
+        localStorage.setItem('assistly_ig_profile_pic', profilePic);
+      }
+    } else {
+      localStorage.setItem(IG_MANUAL_DISCONNECT_KEY, 'true');
+      setInstagramAccountId('');
+      localStorage.removeItem('assistly_ig_account_id');
+      setInstagramAccountName('');
+      localStorage.removeItem('assistly_ig_account_name');
+      setInstagramUsername('');
+      localStorage.removeItem('assistly_ig_username');
+      setInstagramProfilePic('');
+      localStorage.removeItem('assistly_ig_profile_pic');
+    }
+  };
+
+  const runMetaInstagramOAuth = async (options?: { celebrate?: boolean }) => {
+    if (connectingInstagram) return;
+
+    try {
+      if (!user) {
+        await loginWithGoogle();
+      }
+      if (!auth.currentUser) {
+        return;
+      }
+
+      setConnectingInstagram(true);
+      const result = await connectInstagramViaMeta(getAuthHeaders, auth.currentUser.uid);
+      if (result?.igId) {
+        handleConnectedStatusChange(
+          true,
+          result.igId,
+          result.igName,
+          result.username,
+          result.profilePic
+        );
+        if (options?.celebrate) {
+          setCelebrationDisplayName(
+            result.username ? `@${result.username}` : result.igName || 'Instagram'
+          );
+          setShowConnectCelebration(true);
+          setScreen('automations');
+        }
+      }
+    } catch (e) {
+      console.error('Instagram connect failed:', e);
+      alert(e instanceof Error ? e.message : 'Failed to connect Instagram account.');
+    } finally {
+      setConnectingInstagram(false);
+    }
+  };
+
+  const handleConnectInstagram = () => {
+    if (isInstagramConnected) return;
+    return runMetaInstagramOAuth({ celebrate: true });
+  };
+
+  const handleReconnectInstagram = () => runMetaInstagramOAuth();
+
+  const handleSyncWebhooks = async () => {
+    if (!instagramAccountId) {
+      alert('Connect Instagram first.');
+      return;
+    }
+    try {
+      const headers = await getAuthHeaders(instagramAccountId);
+      const res = await fetch('/api/meta/sync-webhooks', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Sync failed');
+      }
+      const pageOk = data.pageHasFeed ? '✓ feed' : '✗ feed missing';
+      const igOk = data.igHasComments ? '✓ comments' : '✗ comments missing';
+      const appOk = data.appSubscriptions && !data.appSubscriptions.error ? '✓ app-level' : '✗ check server logs';
+      alert(
+        `Webhook sync complete.\n\nPage fields: ${(data.pageFields || []).join(', ') || 'none'} (${pageOk})\nIG fields: ${(data.igFields || []).join(', ') || 'none'} (${igOk})\nApp subscriptions: ${appOk}\nCallback: ${data.callbackUrl || 'set WEBHOOK_CALLBACK_URL in .env'}\n\nIf comments still fail, comment on a reel and look for [Webhook] lines in the backend terminal.`
+      );
+    } catch (e) {
+      console.error('Webhook sync failed:', e);
+      alert(e instanceof Error ? e.message : 'Failed to sync webhooks.');
+    }
+  };
+
+  const handleUpgradePlan = async (plan: BillablePlan) => {
+    if (!user) {
+      await loginWithGoogle();
+    }
+    if (!auth.currentUser) return;
+
+    setBillingBusy(plan);
+    try {
+      const headers = await getAuthHeaders(instagramAccountId || undefined);
+      const checkout = await createSubscriptionCheckout(headers, plan);
+      const verifiedPlan = await openRazorpaySubscriptionCheckout(checkout, headers, plan);
+      setCurrentPlan(verifiedPlan);
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'Checkout closed') {
+        alert(e.message);
+      }
+    } finally {
+      setBillingBusy(null);
+    }
+  };
+
+  const handleCreateAutomation = (triggerType: 'comment' | 'dm') => {
+    const newAuto: Automation = {
+      id: 'auto_' + Date.now(),
+      name: 'Automate Campaign',
+      triggerType,
+      status: 'active',
+      createdAt: new Date().toLocaleDateString('en-GB'),
+      lastModified: new Date().toLocaleDateString('en-GB'),
+      keywords: [],
+      replyText: '',
+      enableFollowGate: false,
+      notFollowingMessage: "Thanks! I noticed you aren't following yet. Follow us and reply 'done' to get the link! 📲"
+    };
+    setSelectedAutomation(newAuto);
+    setScreen('automation_builder');
+  };
+
+  const handleEditAutomation = (auto: Automation) => {
+    setSelectedAutomation(auto);
+    setScreen('automation_builder');
+  };
+
+  const handleDeleteAutomation = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this automation?')) return;
+    setAutomations((prev) => prev.filter((a) => a.id !== id));
+    if (instagramAccountId) {
+      try {
+        const headers = await getAuthHeaders(instagramAccountId);
+        const res = await deleteAutomation(headers, id);
+        if (!res.ok) {
+          throw new Error('Server delete failed');
+        }
+        bumpAutomationListRefresh();
+      } catch (e) {
+        console.error('Failed to delete automation from server:', e);
+        alert('Could not delete automation on server. Refresh and try again.');
+      }
+    }
+  };
+
+  const handleToggleStatus = async (id: string) => {
+    const target = automations.find((a) => a.id === id);
+    if (!target) return;
+
+    const updatedAuto: Automation = {
+      ...target,
+      status: target.status === 'active' ? 'inactive' : 'active',
+      lastModified: new Date().toLocaleDateString('en-GB'),
+    };
+
+    setAutomations((prev) => prev.map((a) => (a.id === id ? updatedAuto : a)));
+
+    if (instagramAccountId) {
+      try {
+        const headers = await getAuthHeaders(instagramAccountId);
+        const res = await saveAutomation(headers, updatedAuto);
+        if (!res.ok) {
+          throw new Error('Server toggle failed');
+        }
+        bumpAutomationListRefresh();
+      } catch (e) {
+        console.error('Failed to toggle status on server:', e);
+        setAutomations((prev) => prev.map((a) => (a.id === id ? target : a)));
+        alert('Could not update status on server.');
+      }
+    }
+  };
+
+  const handleSaveAutomation = async (updatedAuto: Automation) => {
+    setAutomations((prev) => {
+      const index = prev.findIndex((a) => a.id === updatedAuto.id);
+      if (index >= 0) {
+        return prev.map((a) => (a.id === updatedAuto.id ? updatedAuto : a));
+      }
+      return [...prev, updatedAuto];
+    });
+
+    if (instagramAccountId) {
+      try {
+        const headers = await getAuthHeaders(instagramAccountId);
+        const res = await saveAutomation(headers, updatedAuto);
+        if (!res.ok) {
+          alert('Saved locally, but server sync failed.');
+        } else {
+          bumpAutomationListRefresh();
+        }
+      } catch (e) {
+        console.error('Server sync error:', e);
+        alert('Saved locally, but server sync failed.');
+      }
+    }
+    setScreen('automations');
   };
 
   // Nav actions
-  const isWorkspace = screen !== 'landing';
+  const isWorkspace = WORKSPACE_SCREENS.includes(screen);
 
   const navItems = [
-    { name: 'Dashboard', id: 'dashboard' as const, icon: <Home className="w-5 h-5" /> },
-    { name: 'Instagram Wizard', id: 'onboarding1' as const, icon: <Instagram className="w-5 h-5" /> },
-    { name: 'Direct Automations', id: 'automation_builder' as const, icon: <Zap className="w-5 h-5" /> },
-    { name: 'Business FAQs', id: 'faq_settings' as const, icon: <Settings className="w-5 h-5" /> },
-    { name: 'Collected CRM Leads', id: 'contacts' as const, icon: <Users className="w-5 h-5" /> },
-    { name: 'Subscription Plan', id: 'pricing' as const, icon: <CreditCard className="w-5 h-5" /> }
+    { name: 'Automations', id: 'automations' as const, icon: <Zap className="w-5 h-5" /> },
+    { name: 'Contacts', id: 'contacts' as const, icon: <Users className="w-5 h-5" /> },
+    { name: 'Settings', id: 'settings' as const, icon: <Settings className="w-5 h-5" />, tab: 'general' as const },
   ];
 
+  const workspaceBreadcrumbs: Record<string, string> = {
+    automations: 'Automations Console',
+    contacts: 'Collected Contacts',
+    settings: 'Account Settings',
+    automation_builder: 'Automation Builder',
+    faq_settings: 'FAQ Settings',
+  };
+
+  const handleWorkspaceCreateNew = () => {
+    if (screen !== 'automations') setScreen('automations');
+    setCreateAutomationSignal((n) => n + 1);
+  };
+
+  const screenContent = (
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={screen}
+        initial={screen === 'landing' ? false : { opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={screen === 'landing' ? undefined : { opacity: 0, y: -12 }}
+        transition={{ duration: 0.3 }}
+        className="flex-1 flex flex-col"
+      >
+        {screen === 'landing' && (
+          <HeroLandingView
+            onGetStarted={async () => {
+              if (!user) {
+                await loginWithGoogle();
+              }
+              setScreen('automations');
+            }}
+            onLogin={loginWithGoogle}
+            onGoToConsole={() => setScreen('automations')}
+            isLoggedIn={!!user}
+          />
+        )}
+
+        {screen === 'privacy' && <PrivacyPolicyPage />}
+        {screen === 'terms' && <TermsPage />}
+        {screen === 'faq' && <FaqPage />}
+        {screen === 'contact' && <ContactPage />}
+
+        {screen === 'automations' && (
+          <AutomationsListView
+            listRefreshKey={automationListRefreshKey}
+            openCreateSignal={createAutomationSignal}
+            onEdit={handleEditAutomation}
+            onCreate={handleCreateAutomation}
+            onDelete={handleDeleteAutomation}
+            onToggleStatus={handleToggleStatus}
+            isInstagramConnected={isInstagramConnected}
+            onConnectInstagram={handleConnectInstagram}
+            connectingInstagram={connectingInstagram}
+            instagramAccountId={instagramAccountId}
+          />
+        )}
+
+        {screen === 'automation_builder' && selectedAutomation && (
+          <AutomationBuilderView
+            automation={selectedAutomation}
+            businessProfile={profile}
+            onSave={handleSaveAutomation}
+            onBack={() => setScreen('automations')}
+            user={user}
+            instagramAccountName={instagramAccountName}
+          />
+        )}
+
+        {screen === 'faq_settings' && (
+          <FAQSettingsView
+            businessProfile={profile}
+            faqs={faqs}
+            onUpdateProfile={handleUpdateProfile}
+            onSaveFAQ={handleSaveFAQ}
+            onDeleteFAQ={handleDeleteFAQ}
+          />
+        )}
+
+        {screen === 'settings' && (
+          <SettingsView
+            businessProfile={profile}
+            instagramAccountName={instagramAccountName}
+            instagramUsername={instagramUsername}
+            instagramProfilePic={instagramProfilePic}
+            isInstagramConnected={isInstagramConnected}
+            currentPlan={currentPlan}
+            onUpdateProfile={handleUpdateProfile}
+            onUpgradePlan={handleUpgradePlan}
+            billingBusy={billingBusy}
+            onConnectInstagram={handleConnectInstagram}
+            onReconnectInstagram={handleReconnectInstagram}
+            onSyncWebhooks={handleSyncWebhooks}
+            connectingInstagram={connectingInstagram}
+            onDisconnectInstagram={() => handleConnectedStatusChange(false)}
+            user={user}
+            defaultTab={settingsTab}
+          />
+        )}
+
+        {screen === 'contacts' && (
+          <ContactsView
+            contacts={contacts}
+            onSaveContact={handleSaveContact}
+            onDeleteContact={handleDeleteContact}
+          />
+        )}
+      </motion.div>
+    </AnimatePresence>
+  );
+
   return (
-    <div className="min-h-screen bg-surface-alt text-on-surface flex flex-col font-sans selection:bg-primary/20">
-      
-      {/* Dynamic Global Top Header (Marketing or Workspace context) */}
-      <nav className="bg-white border-b border-outline-variant/30 sticky top-0 z-40" id="global-navigation-bar">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center">
-            
-            {/* Logo Brand Brand Identifier */}
-            <div 
-              onClick={() => setScreen('landing')}
-              className="flex items-center gap-2 cursor-pointer group"
-              id="app-branding-header"
-            >
-              <div className="w-9 h-9 rounded-xl instagram-bg flex items-center justify-center text-white shadow-md shadow-primary/20 group-hover:scale-105 transition-transform">
-                <Sparkles className="w-5 h-5 text-white fill-white animate-pulse" />
-              </div>
-              <div className="text-left">
-                <h1 className="font-display font-black text-lg tracking-tight text-on-surface">AssistlyDM</h1>
-                <p className="text-[9px] font-mono text-outline leading-none">V1.2 Active Sandbox</p>
-              </div>
-            </div>
+    <div className={`bg-background text-on-surface flex flex-col font-sans selection:bg-primary/20 ${isWorkspace ? 'h-screen overflow-hidden' : 'min-h-screen'}`}>
 
-            {/* Desktop Navigation path lists */}
-            {!isWorkspace ? (
-              <div className="hidden md:flex items-center gap-8 font-sans text-sm font-semibold text-on-surface-variant">
-                <a href="#landing-hero-view" className="hover:text-primary transition-colors">Features</a>
-                <a href="#how-it-works-landing" className="hover:text-primary transition-colors">How It Works</a>
-                <button onClick={() => setScreen('pricing')} className="hover:text-primary transition-colors cursor-pointer">Pricing</button>
-                
-                <span className="h-4 w-[1px] bg-outline-variant/60" />
+      {isWorkspace ? (
+        <WorkspaceShell
+          screen={screen}
+          setScreen={setScreen}
+          settingsTab={settingsTab}
+          setSettingsTab={setSettingsTab}
+          navItems={navItems}
+          isInstagramConnected={isInstagramConnected}
+          user={user}
+          instagramProfilePic={instagramProfilePic}
+          onLogout={async () => {
+            await logout();
+            setScreen('landing');
+          }}
+          onCreateNew={handleWorkspaceCreateNew}
+          onConnectInstagram={handleConnectInstagram}
+          connectingInstagram={connectingInstagram}
+          breadcrumbLeaf={workspaceBreadcrumbs[screen] || 'Workspace'}
+        >
+          {screenContent}
+        </WorkspaceShell>
+      ) : (
+        <main className="flex-1 flex flex-col w-full">{screenContent}</main>
+      )}
 
-                <button 
-                  onClick={() => setScreen('dashboard')}
-                  className="bg-primary text-white hover:bg-primary-container px-4.5 py-2.5 rounded-xl text-xs font-bold shadow-md shadow-primary/10 hover:shadow-primary/20 hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer"
-                  id="btn-nav-console"
-                >
-                  Go to DM Console
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3">
-                <span className="bg-success-whatsapp/15 text-success-whatsapp px-3 py-1 rounded-full text-xs font-sans font-bold uppercase tracking-wider">
-                  Sarah's Sandbox Dashboard
-                </span>
-                <button 
-                  onClick={() => setScreen('landing')}
-                  className="border border-outline-variant/40 hover:bg-surface-container text-on-surface-variant px-3 py-1.5 rounded-lg text-xs font-sans font-semibold flex items-center gap-1 cursor-pointer"
-                  title="Logout back to public landing"
-                >
-                  <LogOut className="w-3.5 h-3.5" /> Logout
-                </button>
-              </div>
-            )}
-
-            {/* Mobile menu trigger */}
-            <div className="flex md:hidden">
-              <button 
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="text-outline hover:text-on-surface transition-colors cursor-pointer p-1"
-              >
-                {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-              </button>
-            </div>
-
-          </div>
-        </div>
-
-        {/* Mobile menu panel layout */}
-        {mobileMenuOpen && (
-          <div className="md:hidden bg-white border-t border-outline-variant/30 px-4 py-4 space-y-3 shadow-lg flex flex-col text-left">
-            {!isWorkspace ? (
-              <>
-                <a 
-                  href="#landing-hero-view" 
-                  onClick={() => setMobileMenuOpen(false)}
-                  className="block font-sans font-semibold text-sm hover:text-primary"
-                >
-                  Features
-                </a>
-                <a 
-                  href="#how-it-works-landing" 
-                  onClick={() => setMobileMenuOpen(false)}
-                  className="block font-sans font-semibold text-sm hover:text-primary"
-                >
-                  How It Works
-                </a>
-                <button 
-                  onClick={() => { setScreen('pricing'); setMobileMenuOpen(false); }}
-                  className="block text-left font-sans font-semibold text-sm hover:text-primary"
-                >
-                  Pricing
-                </button>
-                <div className="h-[1px] bg-outline-variant/30" />
-                <button 
-                  onClick={() => { setScreen('dashboard'); setMobileMenuOpen(false); }}
-                  className="w-full bg-primary text-white py-3 rounded-xl font-sans font-bold text-sm text-center"
-                >
-                  Go to DM Console
-                </button>
-              </>
-            ) : (
-              <>
-                {navItems.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => { setScreen(item.id); setMobileMenuOpen(false); }}
-                    className={`flex items-center gap-3 py-2.5 px-3 rounded-xl text-sm font-sans font-bold text-left ${
-                      screen === item.id 
-                        ? 'bg-primary text-white' 
-                        : 'text-on-surface-variant hover:bg-surface-container'
-                    }`}
-                  >
-                    {item.icon}
-                    {item.name}
-                  </button>
-                ))}
-              </>
-            )}
-          </div>
-        )}
-      </nav>
-
-      {/* Main Container Workspace */}
-      <div className="flex flex-1 flex-col md:flex-row max-w-7xl mx-auto w-full">
-        
-        {/* Workspace core sidebar (Shown only inside cockpit environment) */}
-        {isWorkspace && (
-          <aside className="hidden md:flex flex-col w-64 border-r border-outline-variant/30 bg-white p-6 justify-between gap-6 shrink-0" id="cockpit-sidebar">
-            <div className="space-y-6">
-              <span className="font-mono text-[9px] uppercase tracking-widest text-outline font-extrabold block text-left">
-                Cockpit Navigation
-              </span>
-
-              {/* Sidebar items */}
-              <nav className="flex flex-col gap-2">
-                {navItems.map((item) => {
-                  const isActive = screen === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => setScreen(item.id)}
-                      className={`w-full flex items-center gap-3 py-3 px-4 rounded-xl text-xs font-sans font-extrabold text-left transition-all tracking-wide cursor-pointer ${
-                        isActive 
-                          ? 'bg-primary text-white shadow-md shadow-primary/10' 
-                          : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
-                      }`}
-                    >
-                      {item.icon}
-                      {item.name}
-                    </button>
-                  );
-                })}
-              </nav>
-            </div>
-
-            {/* Bottom active profile specs */}
-            <div className="border-t border-outline-variant/30 pt-4 flex gap-3 text-left">
-              <div className="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center font-bold text-sm text-on-surface">
-                S
-              </div>
-              <div>
-                <p className="font-sans font-bold text-xs text-on-surface truncate pr-1">Sarah's Cafe</p>
-                <span className="px-2 py-0.5 bg-outline-variant/30 text-on-surface-variant text-[9px] font-mono rounded font-bold uppercase mt-1 inline-block">
-                  {currentPlan} plan
-                </span>
-              </div>
-            </div>
-          </aside>
-        )}
-
-        {/* Primary View content switch */}
-        <main className={`flex-1 flex flex-col p-4 md:p-8 ${isWorkspace ? 'bg-surface-alt' : 'bg-surface max-w-none w-full p-0 md:p-0'}`}>
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={screen}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              transition={{ duration: 0.35 }}
-              className="flex-1 flex flex-col"
-            >
-              {screen === 'landing' && (
-                <HeroLandingView 
-                  onGetStarted={() => setScreen('onboarding1')} 
-                  onNavigateToPricing={() => setScreen('pricing')}
-                />
-              )}
-
-              {screen === 'onboarding1' && (
-                <OnboardingStep1 
-                  initialConnected={isInstagramConnected}
-                  onConnectedStatusChange={handleConnectedStatusChange}
-                  onNextStep={() => setScreen('automation_builder')}
-                  onBackToDashboard={() => setScreen('dashboard')}
-                />
-              )}
-
-              {screen === 'automation_builder' && (
-                <AutomationBuilderView 
-                  automation={automation}
-                  businessProfile={profile}
-                  onUpdateAutomation={handleUpdateAutomation}
-                  onSave={handleSaveAutomationComplete}
-                  onBack={() => setScreen('dashboard')}
-                />
-              )}
-
-              {screen === 'faq_settings' && (
-                <FAQSettingsView 
-                  businessProfile={profile}
-                  faqs={faqs}
-                  onUpdateProfile={handleUpdateProfile}
-                  onUpdateFAQs={handleUpdateFAQs}
-                />
-              )}
-
-              {screen === 'contacts' && (
-                <ContactsView 
-                  contacts={contacts}
-                  onUpdateContacts={handleUpdateContacts}
-                />
-              )}
-
-              {screen === 'pricing' && (
-                <PricingView 
-                  currentPlan={currentPlan}
-                  onUpgradePlan={handleUpgradePlan}
-                />
-              )}
-
-              {screen === 'dashboard' && (
-                <DashboardView 
-                  businessProfile={profile}
-                  contacts={contacts}
-                  faqs={faqs}
-                  activities={activities}
-                  onNavigateTo={(target) => setScreen(target)}
-                />
-              )}
-            </motion.div>
-          </AnimatePresence>
-        </main>
-
-      </div>
-
-      {/* Global Minimal Footer */}
-      <footer className="bg-white border-t border-outline-variant/30 py-8 text-center text-xs text-outline font-sans">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-4">
-          <p>© 2026 AssistlyDM. Powered by the Meta Graph Integration API.</p>
-          <div className="flex gap-4">
-            <button onClick={() => setScreen('landing')} className="hover:underline hover:text-primary cursor-pointer">Product Landing</button>
-            <button onClick={() => setScreen('pricing')} className="hover:underline hover:text-primary cursor-pointer">Sub Pricing</button>
-            <span className="text-outline/40">|</span>
-            <span className="font-mono text-[10px] text-primary font-bold">Secure SSL Authorized</span>
-          </div>
-        </div>
-      </footer>
+      <ConnectCelebration
+        show={showConnectCelebration}
+        displayName={celebrationDisplayName}
+        onComplete={() => setShowConnectCelebration(false)}
+      />
 
     </div>
   );

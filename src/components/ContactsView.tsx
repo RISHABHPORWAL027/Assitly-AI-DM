@@ -1,39 +1,37 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Plus, 
-  Search, 
-  Download, 
-  Trash2, 
-  User, 
-  Mail, 
-  Phone, 
-  Filter, 
-  ExternalLink,
-  ChevronLeft,
-  ChevronRight,
-  ShieldAlert,
+import {
+  Plus,
+  Search,
+  Download,
+  Trash2,
+  User,
+  Mail,
+  Phone,
   Database,
-  Calendar,
   X,
-  FileSpreadsheet
+  CheckCircle,
+  Users,
 } from 'lucide-react';
 import { Contact } from '../types';
+import TablePagination from './TablePagination';
+import { usePagination } from '../hooks/usePagination';
+import { WorkspacePageHero, WorkspaceSummaryCard, WorkspaceFooter } from './ui/WorkspacePageHero';
 
 interface ContactsViewProps {
   contacts: Contact[];
-  onUpdateContacts: (updated: Contact[]) => void;
+  onSaveContact: (contact: Contact) => void;
+  onDeleteContact: (id: string) => void;
 }
 
 export default function ContactsView({
   contacts,
-  onUpdateContacts
+  onSaveContact,
+  onDeleteContact,
 }: ContactsViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sourceFilter, setSourceFilter] = useState<'All' | 'Instagram' | 'Automation'>('All');
   const [showAddLeadModal, setShowAddLeadModal] = useState(false);
 
-  // New Lead states
   const [username, setUsername] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
@@ -41,8 +39,7 @@ export default function ContactsView({
 
   const handleDeleteLead = (id: string, name: string) => {
     if (confirm(`Are you sure you want to delete lead @${name}?`)) {
-      const updated = contacts.filter(c => c.id !== id);
-      onUpdateContacts(updated);
+      onDeleteContact(id);
     }
   };
 
@@ -61,326 +58,377 @@ export default function ContactsView({
       phone: phone.trim(),
       email: email.trim(),
       source: source,
-      dateAdded: 'Today'
+      dateAdded: 'Today',
+      status: 'pending',
+      revenue: 0,
     };
 
-    onUpdateContacts([newLead, ...contacts]);
+    onSaveContact(newLead);
     setShowAddLeadModal(false);
-    // Reset
     setUsername('');
     setPhone('');
     setEmail('');
   };
 
-  // Real client-side CSV download compiler!
   const handleExportCSV = () => {
     const csvRows = [
-      ['Customer Username', 'Lead Source', 'Contact Phone', 'Contact Email', 'Date Captured']
+      ['Customer Username', 'Lead Source', 'Contact Phone', 'Contact Email', 'Date Captured'],
     ];
 
-    contacts.forEach(c => {
-      csvRows.push([
-        `@${c.username}`,
-        c.source,
-        c.phone,
-        c.email,
-        c.dateAdded
-      ]);
+    contacts.forEach((c) => {
+      csvRows.push([`@${c.username}`, c.source, c.phone, c.email, c.dateAdded]);
     });
 
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + csvRows.map(e => e.map(val => `"${val.replace(/"/g, '""')}"`).join(",")).join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `assistly_dm_leads_${Date.now()}.csv`);
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      csvRows.map((e) => e.map((val) => `"${val.replace(/"/g, '""')}"`).join(',')).join('\n');
+    const link = document.createElement('a');
+    link.setAttribute('href', encodeURI(csvContent));
+    link.setAttribute('download', `assistly_dm_leads_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // Filter conditions
-  const filteredContacts = contacts.filter(c => {
-    const matchesSearch = c.username.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          c.email.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          c.phone.includes(searchQuery);
-    
+  const filteredContacts = contacts.filter((c) => {
+    const matchesSearch =
+      c.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.phone.includes(searchQuery);
+
     if (sourceFilter === 'All') return matchesSearch;
     return matchesSearch && c.source === sourceFilter;
   });
 
+  const {
+    page,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalCount: filteredTotal,
+    paginatedItems: pageContacts,
+  } = usePagination(filteredContacts, {
+    resetKey: `${searchQuery}-${sourceFilter}`,
+  });
+
+  const totalLeads = contacts.length;
+  const convertedLeads = contacts.filter((c) => c.status === 'paid').length;
+  const totalRevenue = contacts.reduce(
+    (acc, c) => acc + (c.status === 'paid' ? (c.revenue || 0) : 0),
+    0
+  );
+
   return (
-    <div className="space-y-8 text-left pb-16" id="contacts-crm-block">
-      
-      {/* CRM Heading Banner */}
-      <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-        <div className="text-left">
-          <h2 className="font-display font-extrabold text-2xl md:text-3xl text-on-surface">
-            Collected Contacts CRM
-          </h2>
-          <p className="font-sans text-sm text-on-surface-variant mt-0.5">
-            Identify hot lead details captured 24/7 by your automated Instagram responder.
-          </p>
-        </div>
+    <div className="workspace-page space-y-6" id="contacts-crm-block">
+      <WorkspacePageHero
+        badge="Lead CRM"
+        title="Collected Contacts"
+        subtitle="Every phone, email, and DM lead captured by your automations — organized, searchable, and ready to convert."
+        chipTitle="Leads synced"
+        chipSubtitle="From Instagram & automations"
+        visualIcon={<Users className="w-16 h-16" strokeWidth={1.5} />}
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={handleExportCSV}
+              id="btn-crm-export"
+              className="bg-primary text-white px-8 py-3.5 rounded-lg font-semibold text-sm flex items-center gap-3 hover:shadow-lg hover:shadow-primary/30 transition-all hover:-translate-y-0.5"
+            >
+              <Download className="w-5 h-5" />
+              Export CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAddLeadModal(true)}
+              className="bg-transparent border border-outline-variant text-on-surface px-8 py-3.5 rounded-lg font-semibold text-sm flex items-center gap-2 hover:bg-surface-container-low transition-all"
+            >
+              <Plus className="w-5 h-5" />
+              Manual Lead
+            </button>
+          </>
+        }
+      />
 
-        {/* Sync Pillar Cluster metrics represent Screen 7 */}
-        <div className="flex gap-4 items-center shrink-0">
-          <div className="bg-white p-3 rounded-xl border border-outline-variant/30 text-left shadow-sm">
-            <p className="font-sans text-[10px] text-outline uppercase font-bold leading-none mb-1">Active Threads</p>
-            <p className="font-sans font-black text-sm text-on-surface">42 threads</p>
-          </div>
-          <div className="bg-white p-3 rounded-xl border border-outline-variant/30 text-left shadow-sm">
-            <p className="font-sans text-[10px] text-outline uppercase font-bold leading-none mb-1">Weekly Growth</p>
-            <p className="font-sans font-black text-sm text-success-whatsapp">+24 leads</p>
-          </div>
-          
-          <button 
-            onClick={handleExportCSV}
-            className="bg-primary text-white hover:bg-primary-container px-4 py-3 rounded-xl flex items-center gap-2 font-sans font-bold text-xs shadow-md transition-all cursor-pointer"
-            id="btn-crm-export"
-          >
-            <Download className="w-4 h-4" /> Export CSV Spreadsheet
-          </button>
-        </div>
-      </header>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <WorkspaceSummaryCard
+          title={`${totalLeads}`}
+          label="Total captured leads"
+          hint="All contacts in your CRM"
+          accent="primary"
+          pulse={totalLeads > 0}
+          icon={<User className="w-5 h-5" />}
+          watermarkIcon={<User className="w-24 h-24 text-primary" />}
+        />
+        <WorkspaceSummaryCard
+          title={`${convertedLeads} paid`}
+          label="Converted leads"
+          hint="Marked as paid in CRM"
+          accent="secondary"
+          icon={<CheckCircle className="w-5 h-5" />}
+          watermarkIcon={<CheckCircle className="w-24 h-24 text-secondary" />}
+        />
+        <WorkspaceSummaryCard
+          title={`₹${totalRevenue.toLocaleString('en-IN')}`}
+          label="Revenue tracked (INR)"
+          hint="From paid lead records"
+          accent="tertiary"
+          icon={<Database className="w-5 h-5" />}
+          watermarkIcon={<Database className="w-24 h-24 text-tertiary" />}
+        />
+      </div>
 
-      {/* CRM Main Frame panel */}
-      <div className="bg-white rounded-2xl border border-outline-variant/30 shadow-sm overflow-hidden flex flex-col">
-        
-        {/* Search controls row */}
-        <div className="p-4 bg-surface-container-low border-b border-outline-variant/30 flex flex-col md:flex-row gap-4 items-center justify-between">
-          
-          {/* Search textfield */}
-          <div className="relative w-full md:max-w-xs text-left">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-outline w-4 h-4" />
-            <input 
-              type="text" 
+      <div className="space-y-4">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+          <div className="relative w-full lg:max-w-xs">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-outline" />
+            <input
+              type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by username, email..."
-              className="w-full bg-white border border-outline-variant rounded-xl pl-10 pr-4 py-2 text-sm font-sans placeholder:text-outline/40 focus:ring-1 focus:ring-primary focus:outline-none"
+              className="w-full pl-12 pr-4 py-3 bg-white border border-outline-variant rounded-2xl focus:ring-2 focus:ring-primary focus:border-primary transition-all shadow-sm text-sm outline-none"
             />
           </div>
-
-          {/* Filters right side */}
-          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto md:justify-end">
-            <div className="flex bg-white rounded-xl p-1 border border-outline-variant/50">
-              <button 
-                onClick={() => setSourceFilter('All')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-sans font-bold cursor-pointer ${
-                  sourceFilter === 'All' ? 'bg-primary text-white shadow-sm' : 'text-on-surface-variant hover:bg-surface-container'
+          <div className="bg-surface-container-low p-1 rounded-xl flex items-center border border-outline-variant/30">
+            {(['All', 'Instagram', 'Automation'] as const).map((src) => (
+              <button
+                key={src}
+                type="button"
+                onClick={() => setSourceFilter(src)}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                  sourceFilter === src
+                    ? 'bg-white shadow-sm text-on-surface'
+                    : 'text-outline hover:text-on-surface'
                 }`}
               >
-                All Sources
+                {src === 'All' ? 'All Sources' : src}
               </button>
-              <button 
-                onClick={() => setSourceFilter('Instagram')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-sans font-bold cursor-pointer ${
-                  sourceFilter === 'Instagram' ? 'bg-primary text-white shadow-sm' : 'text-on-surface-variant hover:bg-surface-container'
-                }`}
-              >
-                Instagram
-              </button>
-              <button 
-                onClick={() => setSourceFilter('Automation')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-sans font-bold cursor-pointer ${
-                  sourceFilter === 'Automation' ? 'bg-primary text-white shadow-sm' : 'text-on-surface-variant hover:bg-surface-container'
-                }`}
-              >
-                Automation Direct
-              </button>
-            </div>
-
-            <button 
-              onClick={() => setShowAddLeadModal(true)}
-              className="px-4 py-2 border-2 border-dashed border-outline-variant/60 text-outline hover:border-primary hover:text-primary rounded-xl font-sans font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
-            >
-              <Plus className="w-4 h-4" /> Manual Lead
-            </button>
+            ))}
           </div>
         </div>
 
-        {/* Table representation (Matching Screen 7 layout) */}
-        <div className="overflow-x-auto w-full">
-          <table className="w-full text-left font-sans border-collapse">
-            <thead>
-              <tr className="bg-surface-alt border-b border-outline-variant/30 text-[11px] font-bold text-outline uppercase tracking-wider">
-                <th className="py-4 px-6">Customer Profile</th>
-                <th className="py-4 px-6">Source / Platform</th>
-                <th className="py-4 px-6">Contact Phone</th>
-                <th className="py-4 px-6">Contact Email</th>
-                <th className="py-4 px-6 text-right">Date Captured / Delete</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-outline-variant/20 text-sm">
-              {filteredContacts.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-12 text-center text-outline font-sans text-sm">
-                    No collected contacts matching the query.
-                  </td>
+        <div className="bg-white rounded-3xl shadow-sm border border-surface-container overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-surface-container bg-surface-container-lowest">
+                  <th className="px-6 py-5 text-xs font-semibold uppercase tracking-widest text-outline">
+                    Customer Profile
+                  </th>
+                  <th className="px-6 py-5 text-xs font-semibold uppercase tracking-widest text-outline">
+                    Source
+                  </th>
+                  <th className="px-6 py-5 text-xs font-semibold uppercase tracking-widest text-outline">
+                    Phone
+                  </th>
+                  <th className="px-6 py-5 text-xs font-semibold uppercase tracking-widest text-outline">
+                    Email
+                  </th>
+                  <th className="px-6 py-5 text-xs font-semibold uppercase tracking-widest text-outline">
+                    Status
+                  </th>
+                  <th className="px-6 py-5 text-xs font-semibold uppercase tracking-widest text-outline">
+                    Revenue
+                  </th>
+                  <th className="px-6 py-5 text-xs font-semibold uppercase tracking-widest text-outline text-right">
+                    Actions
+                  </th>
                 </tr>
-              ) : (
-                filteredContacts.map((lead) => (
-                  <tr key={lead.id} className="hover:bg-surface-container-low/30 transition-colors font-sans">
-                    <td className="py-4 px-6 flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant font-sans font-bold uppercase shrink-0">
-                        {lead.username.substring(0, 1)}
-                      </div>
-                      <div className="text-left">
-                        <p className="font-bold text-on-surface leading-none">@{lead.username}</p>
-                        <p className="text-[10px] text-outline mt-1 font-mono">ID: {lead.id}</p>
-                      </div>
-                    </td>
-                    <td className="py-4 px-6">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold leading-none ${
-                        lead.source === 'Instagram' 
-                          ? 'bg-purple-100 text-purple-700' 
-                          : 'bg-indigo-100 text-indigo-700'
-                      }`}>
-                        <span className="w-1.5 h-1.5 rounded-full bg-current"></span>
-                        {lead.source}
-                      </span>
-                    </td>
-                    <td className="py-4 px-6 font-mono font-medium text-on-surface-variant">
-                      {lead.phone}
-                    </td>
-                    <td className="py-4 px-6 text-on-surface-variant">
-                      {lead.email}
-                    </td>
-                    <td className="py-4 px-6 text-right">
-                      <div className="flex items-center justify-end gap-3">
-                        <span className="text-xs text-outline font-medium mr-2">{lead.dateAdded}</span>
-                        <button 
-                          onClick={() => handleDeleteLead(lead.id, lead.username)}
-                          className="w-8 h-8 rounded-lg text-error hover:bg-error/10 flex items-center justify-center transition-colors cursor-pointer" 
-                          title="Delete Lead"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+              </thead>
+              <tbody className="divide-y divide-surface-container-low">
+                {pageContacts.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-16 text-center text-outline text-sm">
+                      No collected contacts matching your search.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Table footer controls pagination simulation */}
-        <div className="p-4 bg-surface-alt border-t border-outline-variant/20 flex justify-between items-center text-xs text-outline font-sans">
-          <span>Row count: {filteredContacts.length} of {contacts.length} entries</span>
-          <div className="flex gap-2">
-            <button className="p-1 px-2 border border-outline-variant rounded hover:bg-surface-container transition-colors cursor-not-allowed" disabled>
-              Prev
-            </button>
-            <button className="p-1 px-2 border border-outline-variant bg-white rounded shadow-sm text-on-surface font-semibold">
-              1
-            </button>
-            <button className="p-1 px-2 border border-outline-variant rounded hover:bg-surface-container transition-colors cursor-not-allowed" disabled>
-              Next
-            </button>
+                ) : (
+                  pageContacts.map((lead) => (
+                    <tr key={lead.id} className="table-row-hover transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 rounded-xl bg-primary-fixed flex items-center justify-center text-primary font-bold uppercase shrink-0">
+                            {lead.username.substring(0, 1)}
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-on-surface">@{lead.username}</p>
+                            <p className="text-xs text-outline font-mono">ID: {lead.id}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span
+                          className={`px-3 py-1 rounded-full text-xs font-medium ${
+                            lead.source === 'Instagram'
+                              ? 'bg-secondary-fixed text-on-secondary-fixed'
+                              : 'bg-primary-fixed text-on-primary-fixed'
+                          }`}
+                        >
+                          {lead.source}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm font-mono text-on-surface-variant">{lead.phone}</td>
+                      <td className="px-6 py-4 text-sm font-mono text-on-surface-variant">{lead.email}</td>
+                      <td className="px-6 py-4">
+                        <select
+                          value={lead.status || 'pending'}
+                          onChange={(e) => onSaveContact({ ...lead, status: e.target.value })}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold border outline-none cursor-pointer bg-white ${
+                            lead.status === 'paid'
+                              ? 'text-success-whatsapp border-success-whatsapp/30'
+                              : lead.status === 'failed'
+                              ? 'text-red-600 border-red-200'
+                              : 'text-on-surface-variant border-outline-variant'
+                          }`}
+                        >
+                          <option value="pending">Pending</option>
+                          <option value="paid">Paid</option>
+                          <option value="failed">Failed</option>
+                          <option value="rejected">Rejected</option>
+                        </select>
+                      </td>
+                      <td className="px-6 py-4">
+                        {lead.status === 'paid' ? (
+                          <div className="flex items-center gap-1">
+                            <span className="text-success-whatsapp font-bold text-xs">₹</span>
+                            <input
+                              key={`revenue-${lead.id}-${lead.revenue ?? 0}`}
+                              type="number"
+                              defaultValue={lead.revenue || 0}
+                              onBlur={(e) => {
+                                const val = parseFloat(e.target.value) || 0;
+                                if (val !== (lead.revenue || 0)) {
+                                  onSaveContact({ ...lead, revenue: val });
+                                }
+                              }}
+                              className="w-20 bg-white border border-outline-variant/30 rounded-lg px-2 py-1 text-xs font-mono font-bold outline-none text-on-surface focus:ring-2 focus:ring-primary/20"
+                            />
+                          </div>
+                        ) : (
+                          <span className="text-outline text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <span className="text-xs text-outline hidden sm:inline">{lead.dateAdded}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteLead(lead.id, lead.username)}
+                            className="p-2 hover:bg-error-container hover:text-on-error-container rounded-lg transition-all text-on-surface-variant"
+                            title="Delete lead"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
+          <TablePagination
+            page={page}
+            pageSize={pageSize}
+            totalCount={filteredTotal}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            itemLabel="contacts"
+            variant="reference"
+          />
         </div>
       </div>
 
-      {/* Database Security disclaimer panel */}
-      <section className="bg-surface-container-low p-6 rounded-2xl border border-outline-variant/30 flex gap-4 text-left font-sans">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary shrink-0">
-          <Database className="w-5 h-5 text-primary" />
+      <div className="bg-white rounded-3xl p-6 shadow-sm border border-surface-container-low flex gap-4">
+        <div className="w-12 h-12 rounded-2xl bg-primary-fixed flex items-center justify-center text-primary shrink-0">
+          <Database className="w-5 h-5" />
         </div>
         <div>
-          <h5 className="font-bold text-sm text-on-surface mb-0.5">Secured CRM Database Encryption</h5>
-          <p className="text-xs text-on-surface-variant">
-            All leads are stored locally and encrypted using AES-256 standard before being synced back with your authorized databases. Meets strict GDPR & CCPA privacy guidelines.
+          <h5 className="font-semibold text-sm text-on-surface">Secured CRM storage</h5>
+          <p className="text-xs text-on-surface-variant mt-1 leading-relaxed">
+            Leads are stored securely and synced with your connected Instagram account. Export anytime as CSV.
           </p>
         </div>
-      </section>
+      </div>
 
-      {/* Manual Add Lead Modal Dialog */}
+      <WorkspaceFooter />
+
       {showAddLeadModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white rounded-2xl border border-outline-variant/30 shadow-2xl p-6 md:p-8 max-w-lg w-full text-left relative">
-            <button 
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white rounded-3xl border border-surface-container shadow-2xl p-6 md:p-8 max-w-lg w-full text-left relative">
+            <button
+              type="button"
               onClick={() => setShowAddLeadModal(false)}
-              className="absolute right-4 top-4 text-outline hover:text-on-surface cursor-pointer"
+              className="absolute right-4 top-4 text-outline hover:text-on-surface"
             >
               <X className="w-5 h-5" />
             </button>
 
-            <h3 className="font-display font-bold text-lg text-on-surface mb-1">
-              Add Manual Contact Lead
-            </h3>
-            <p className="font-sans text-xs text-on-surface-variant mb-6">
-              Insert a walk-in client or phone lead manually into the CRM data logs.
-            </p>
+            <h3 className="font-display font-bold text-lg text-on-surface mb-1">Add Manual Contact</h3>
+            <p className="text-xs text-on-surface-variant mb-6">Insert a lead manually into your CRM.</p>
 
             <form onSubmit={handleAddManualLead} className="space-y-4">
               <div className="flex flex-col gap-1.5">
-                <label className="font-sans font-bold text-xs text-on-surface-variant">Instagram Username handle</label>
+                <label className="font-semibold text-xs text-on-surface-variant">Instagram username</label>
                 <div className="relative">
-                  <input 
-                    type="text" 
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-outline text-sm">@</span>
+                  <input
+                    type="text"
                     required
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    className="w-full border border-outline-variant rounded-xl p-3 pl-10 focus:ring-2 focus:ring-primary focus:outline-none font-sans text-sm"
-                    placeholder="e.g. delicious_bakes"
+                    className="w-full border border-outline-variant rounded-xl p-3 pl-10 focus:ring-2 focus:ring-primary focus:outline-none text-sm"
+                    placeholder="username"
                   />
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-outline font-sans text-sm">@</span>
                 </div>
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="font-sans font-bold text-xs text-on-surface-variant">Phone Number</label>
+                <label className="font-semibold text-xs text-on-surface-variant">Phone</label>
                 <div className="relative">
-                  <input 
-                    type="tel" 
+                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 text-outline w-4 h-4" />
+                  <input
+                    type="tel"
                     required
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    className="w-full border border-outline-variant rounded-xl p-3 pl-10 focus:ring-2 focus:ring-primary focus:outline-none font-sans text-sm"
-                    placeholder="+1 (555) 0123"
+                    className="w-full border border-outline-variant rounded-xl p-3 pl-10 focus:ring-2 focus:ring-primary focus:outline-none text-sm"
                   />
-                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 text-outline w-4 h-4" />
                 </div>
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="font-sans font-bold text-xs text-on-surface-variant">Email Address</label>
+                <label className="font-semibold text-xs text-on-surface-variant">Email</label>
                 <div className="relative">
-                  <input 
-                    type="email" 
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-outline w-4 h-4" />
+                  <input
+                    type="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full border border-outline-variant rounded-xl p-3 pl-10 focus:ring-2 focus:ring-primary focus:outline-none font-sans text-sm"
-                    placeholder="client@mail.com"
+                    className="w-full border border-outline-variant rounded-xl p-3 pl-10 focus:ring-2 focus:ring-primary focus:outline-none text-sm"
                   />
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-outline w-4 h-4" />
                 </div>
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="font-sans font-bold text-xs text-on-surface-variant">Capture Source</label>
-                <div className="flex gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setSource('Instagram')}
-                    className={`flex-1 py-2 border rounded-xl font-sans font-bold text-xs cursor-pointer ${
-                      source === 'Instagram' ? 'border-primary bg-primary/10 text-primary' : 'border-outline-variant/30 text-on-surface-variant'
-                    }`}
-                  >
-                    Instagram Mention
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSource('Automation')}
-                    className={`flex-1 py-2 border rounded-xl font-sans font-bold text-xs cursor-pointer ${
-                      source === 'Automation' ? 'border-primary bg-primary/10 text-primary' : 'border-outline-variant/30 text-on-surface-variant'
-                    }`}
-                  >
-                    Direct Message Automation
-                  </button>
+                <label className="font-semibold text-xs text-on-surface-variant">Source</label>
+                <div className="flex gap-2">
+                  {(['Instagram', 'Automation'] as const).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setSource(s)}
+                      className={`flex-1 py-2 border rounded-xl text-xs font-semibold ${
+                        source === s
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-outline-variant/30 text-on-surface-variant'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -388,15 +436,15 @@ export default function ContactsView({
                 <button
                   type="button"
                   onClick={() => setShowAddLeadModal(false)}
-                  className="px-4 py-2 bg-surface-alt hover:bg-surface-container text-on-surface-variant font-sans font-bold text-xs rounded-xl"
+                  className="px-4 py-2 text-on-surface-variant font-semibold text-xs rounded-xl hover:bg-surface-container-low"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-primary text-white hover:bg-primary-container font-sans font-bold text-xs rounded-xl shadow-md"
+                  className="px-5 py-2 bg-primary text-white font-semibold text-xs rounded-xl shadow-md hover:shadow-lg transition-all"
                 >
-                  Append CRM Lead
+                  Add Lead
                 </button>
               </div>
             </form>

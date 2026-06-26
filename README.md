@@ -15,6 +15,6 @@ View your app in AI Studio: https://ai.studio/apps/13608b1a-2e25-4c7f-a883-0b21a
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Copy `.env.example` to `.env` and fill in Firebase and Meta credentials
 3. Run the app:
    `npm run dev`

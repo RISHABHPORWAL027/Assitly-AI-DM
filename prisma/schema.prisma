@@ -1,0 +1,58 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url = env("DATABASE_URL")
+}
+
+model User {
+  id                 String               @id @default(uuid())
+  email              String               @unique
+  hasEverUsedTrial   Boolean              @default(false)
+  googleUid          String               @unique
+  subscriptions      Subscription[]
+  trials          Trial[] @relation("UserTrials")
+  instagramAccounts InstagramAccount[]
+
+}
+
+model InstagramAccount {
+  id               String      @id @default(uuid())
+  userId           String
+  user             User        @relation(fields: [userId], references: [id])
+  instagramUserId  String
+  username         String
+  accessToken      String
+  refreshToken     String?
+  connectedAt      DateTime    @default(now())
+  trials           Trial[]
+  subscriptions    Subscription[]
+}
+
+model Trial {
+  id                 String            @id @default(uuid())
+  userId             String
+  user               User              @relation("UserTrials", fields: [userId], references: [id])
+  instagramAccountId String
+  instagramAccount   InstagramAccount  @relation(fields: [instagramAccountId], references: [id])
+  startedAt          DateTime          @default(now())
+  endsAt             DateTime
+  used               Boolean           @default(false)
+  promoCode          String?
+}
+
+
+
+model Subscription {
+  id                     String            @id @default(uuid())
+  userId                 String
+  user                   User              @relation(fields: [userId], references: [id])
+  instagramAccountId     String?
+  instagramAccount       InstagramAccount? @relation(fields: [instagramAccountId], references: [id])
+  product                String            @default("assistly-dm")
+  plan                   String
+  razorpaySubscriptionId String            @unique
+  createdAt              DateTime          @default(now())
+}
