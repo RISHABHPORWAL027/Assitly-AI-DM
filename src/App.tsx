@@ -620,30 +620,38 @@ export default function App() {
       return [...prev, updatedAuto];
     });
 
-    if (instagramAccountId) {
-      try {
-        const headers = await getAuthHeaders(instagramAccountId);
-        const res = await saveAutomation(headers, updatedAuto);
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          const detail = body?.error || `HTTP ${res.status}`;
-          console.error('Automation save failed:', res.status, detail);
-          alert(`Saved locally, but server sync failed.\n\n${detail}`);
-        } else {
-          bumpAutomationListRefresh();
-        }
-      } catch (e) {
-        console.error('Server sync error:', e);
-        alert(
-          `Saved locally, but server sync failed.\n\n${
-            e instanceof Error ? e.message : 'Network error — check Railway is running.'
-          }`
-        );
-      }
-    } else {
+    if (!instagramAccountId) {
       alert('Connect Instagram first — automations need a linked account to sync to the server.');
+      return;
     }
-    setScreen('automations');
+
+    try {
+      const headers = await getAuthHeaders(instagramAccountId);
+      if (!headers.Authorization) {
+        alert('Your session expired. Please sign out and sign in again, then retry Save & Publish.');
+        return;
+      }
+
+      const res = await saveAutomation(headers, updatedAuto);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const detail = body?.error || `HTTP ${res.status}`;
+        console.error('Automation save failed:', res.status, detail);
+        alert(`Saved locally, but server sync failed.\n\n${detail}`);
+        return;
+      }
+
+      bumpAutomationListRefresh();
+      setScreen('automations');
+    } catch (e) {
+      console.error('Server sync error:', e);
+      const message = e instanceof Error ? e.message : 'Network error';
+      const hint =
+        message === 'Failed to fetch'
+          ? 'Could not reach the server. Check your connection, or set VITE_BACKEND_URL on Vercel to your Railway URL.'
+          : message;
+      alert(`Saved locally, but server sync failed.\n\n${hint}`);
+    }
   };
 
   // Nav actions

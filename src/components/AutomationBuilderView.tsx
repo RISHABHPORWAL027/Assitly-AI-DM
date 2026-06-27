@@ -65,7 +65,7 @@ const SUGGESTED_KEYWORDS: Record<string, string[]> = {
 interface AutomationBuilderViewProps {
   automation: Automation;
   businessProfile: BusinessProfile;
-  onSave: (updated: Automation) => void;
+  onSave: (updated: Automation) => void | Promise<void>;
   onBack: () => void;
   user?: any;
   instagramAccountName?: string;
@@ -141,6 +141,7 @@ export default function AutomationBuilderView({
   // Comment replies states
   const [isRepliesModalOpen, setIsRepliesModalOpen] = useState(false);
   const [modalReplies, setModalReplies] = useState<string[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (isRepliesModalOpen) {
@@ -320,7 +321,8 @@ export default function AutomationBuilderView({
   };
 
   // Save changes and publish
-  const handlePublish = () => {
+  const handlePublish = async () => {
+    if (isSaving) return;
     if (!draft.name.trim()) {
       alert('Please enter a name for this automation.');
       return;
@@ -367,10 +369,15 @@ export default function AutomationBuilderView({
     finalDraft.enableFollowGate = !!followBlock;
     finalDraft.notFollowingMessage = followBlock?.followGateText || '';
 
-    onSave({
-      ...finalDraft,
-      lastModified: new Date().toLocaleDateString('en-GB')
-    });
+    setIsSaving(true);
+    try {
+      await onSave({
+        ...finalDraft,
+        lastModified: new Date().toLocaleDateString('en-GB')
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const updateLeadCaptureType = (id: string, captureType: LeadCaptureType) => {
@@ -640,9 +647,10 @@ export default function AutomationBuilderView({
         <div className="flex items-center gap-3">
           <button 
             onClick={handlePublish}
-            className="px-5 py-2.5 bg-neutral-900 hover:bg-neutral-800 text-white font-sans text-xs font-bold rounded-xl transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shadow-sm"
+            disabled={isSaving}
+            className="px-5 py-2.5 bg-neutral-900 hover:bg-neutral-800 disabled:opacity-60 disabled:cursor-not-allowed text-white font-sans text-xs font-bold rounded-xl transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shadow-sm"
           >
-            Save & Publish
+            {isSaving ? 'Saving…' : 'Save & Publish'}
           </button>
         </div>
       </header>

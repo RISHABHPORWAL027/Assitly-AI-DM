@@ -86,6 +86,35 @@ async function uploadBufferToFirebaseStorage(buffer: Buffer, filename: string, m
   return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent('uploads/' + filename)}?alt=media`;
 }
 
+async function uploadDataUrlToStorage(dataUrl: string): Promise<string> {
+  const matches = dataUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+  if (!matches || matches.length !== 3) {
+    throw new Error('Invalid image data URL');
+  }
+
+  const mimeType = matches[1];
+  const ext = mimeType.split('/')[1] || 'png';
+  const buffer = Buffer.from(matches[2], 'base64');
+  const filename = `img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext}`;
+
+  try {
+    return await uploadBufferToFirebaseStorage(buffer, filename, mimeType);
+  } catch (storageErr: any) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        storageErr?.message || 'Image upload failed — configure Firebase Storage on the server.'
+      );
+    }
+
+    const uploadsDir = path.join(process.cwd(), 'server', 'public', 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+    return `/uploads/${filename}`;
+  }
+}
+
 const IG_PROFILE_FIELDS = 'name,username,profile_picture_url,biography,website,followers_count,follows_count,media_count';
 
 function envTrim(key: string): string {
@@ -640,8 +669,33 @@ async function clearLeadGateForUser(igAccountId: string, senderId: string) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const allowedOrigin = process.env.VITE_FRONTEND_URL || "*";
-app.use(cors({ origin: allowedOrigin, credentials: true }));
+const allowedOrigins = new Set(
+  [
+    process.env.VITE_FRONTEND_URL,
+    'https://assistlydm.com',
+    'https://www.assistlydm.com',
+    'http://localhost:5173',
+    'http://localhost:3000',
+  ].filter(Boolean)
+);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.has(origin) || process.env.VITE_FRONTEND_URL === '*') {
+        callback(null, true);
+        return;
+      }
+      if (process.env.NODE_ENV !== 'production') {
+        callback(null, true);
+        return;
+      }
+      console.warn('[CORS] Blocked origin:', origin);
+      callback(null, false);
+    },
+    credentials: true,
+  })
+);
 
 app.post(
   '/api/billing/webhook',
@@ -1416,6 +1470,25 @@ async function upsertAutomationInFirestore(igAccountId: string, automation: any)
   await persistAutomationsToFirestore(igAccountId, list);
   return saved;
 }
+
+// Upload a single automation image (base64 data URL → Firebase Storage URL)
+app.post('/api/automations/upload-image', async (req: Request, res: Response) => {
+  const igAccountId = await checkAuthAndGetIgId(req, res);
+  if (!igAccountId) return;
+
+  const { dataUrl } = req.body || {};
+  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+    return res.status(400).json({ error: 'Expected dataUrl with data:image/ prefix' });
+  }
+
+  try {
+    const url = await uploadDataUrlToStorage(dataUrl);
+    return res.status(200).json({ success: true, url });
+  } catch (e: any) {
+    console.error('[Automations] Image upload failed:', e);
+    return res.status(500).json({ error: e?.message || 'Image upload failed' });
+  }
+});
 
 // Save or update a single automation (preferred — small payload)
 app.post('/api/automations/save', async (req: Request, res: Response) => {
