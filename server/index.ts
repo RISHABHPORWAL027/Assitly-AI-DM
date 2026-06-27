@@ -682,12 +682,21 @@ const allowedOrigins = new Set(
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.has(origin) || process.env.VITE_FRONTEND_URL === '*') {
+      // curl / server-to-server
+      if (!origin) {
         callback(null, true);
         return;
       }
+      if (allowedOrigins.has(origin)) {
+        callback(null, origin);
+        return;
+      }
+      if (process.env.VITE_FRONTEND_URL === '*') {
+        callback(null, origin);
+        return;
+      }
       if (process.env.NODE_ENV !== 'production') {
-        callback(null, true);
+        callback(null, origin);
         return;
       }
       console.warn('[CORS] Blocked origin:', origin);

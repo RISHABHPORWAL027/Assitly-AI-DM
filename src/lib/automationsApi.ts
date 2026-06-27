@@ -1,5 +1,5 @@
 import type { Automation } from '../types';
-import { postJson, type AuthHeaders } from './apiClient';
+import { getJson, postJson, type AuthHeaders } from './apiClient';
 import { uploadAutomationImage } from './imageUpload';
 
 async function prepareAutomationForSave(
@@ -50,7 +50,7 @@ export interface AutomationStats {
 export async function fetchAutomationStats(
   headers: AuthHeaders
 ): Promise<AutomationStats | null> {
-  const res = await fetch('/api/automations?stats=true', { headers });
+  const res = await getJson('/api/automations?stats=true', headers);
   if (!res.ok) return null;
   const data = await res.json();
   if (typeof data?.total !== 'number') return null;

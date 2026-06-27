@@ -36,6 +36,11 @@ export async function uploadAutomationImage(
 ): Promise<string> {
   const compressed = await compressDataUrl(dataUrl);
   const res = await postJson('/api/automations/upload-image', headers, { dataUrl: compressed });
+  // Railway may not have redeployed yet — fall back to inline compressed base64 on save
+  if (res.status === 404) {
+    console.warn('[Upload] upload-image route unavailable — using compressed inline image on save');
+    return compressed;
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body?.error || `Image upload failed (HTTP ${res.status})`);
