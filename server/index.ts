@@ -21,44 +21,52 @@ let bucket: any = null;
 try {
   const serviceAccountKeyPath = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   const storageBucketName = process.env.VITE_FIREBASE_STORAGE_BUCKET || 'assistlyai-dm.firebasestorage.app';
+  let serviceAccount: Record<string, unknown> | null = null;
 
   if (serviceAccountKeyPath) {
-    const resolvedPath = path.resolve(process.cwd(), serviceAccountKeyPath);
-    if (fs.existsSync(resolvedPath)) {
-      const serviceAccount = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
-      if (getApps().length === 0) {
-        initializeApp({
-          credential: cert(serviceAccount),
-          storageBucket: storageBucketName
-        });
-      }
-      console.log('Firebase Admin initialized successfully using service account key at:', resolvedPath);
+    const trimmed = serviceAccountKeyPath.trim();
+
+    if (trimmed.startsWith('{')) {
+      serviceAccount = JSON.parse(trimmed);
+      console.log('Firebase Admin initializing from inline service account JSON env var.');
     } else {
-      console.warn(`Firebase Service Account JSON file not found at: ${resolvedPath}. Falling back to default project configuration.`);
-      if (getApps().length === 0) {
-        initializeApp({
-          projectId: process.env.VITE_FIREBASE_PROJECT_ID,
-          storageBucket: storageBucketName
-        });
+      const resolvedPath = path.resolve(process.cwd(), trimmed);
+      if (fs.existsSync(resolvedPath)) {
+        serviceAccount = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
+        console.log('Firebase Admin initializing from service account file at:', resolvedPath);
+      } else {
+        console.error(
+          `Firebase Service Account JSON file not found at: ${resolvedPath}. ` +
+            'Set FIREBASE_SERVICE_ACCOUNT_KEY to the full JSON content on Railway.'
+        );
       }
     }
   } else {
+    console.error(
+      'FIREBASE_SERVICE_ACCOUNT_KEY is not set. Firestore and Storage are disabled until credentials are configured.'
+    );
+  }
+
+  if (serviceAccount) {
     if (getApps().length === 0) {
       initializeApp({
-        projectId: process.env.VITE_FIREBASE_PROJECT_ID,
-        storageBucket: storageBucketName
+        credential: cert(serviceAccount as Parameters<typeof cert>[0]),
+        storageBucket: storageBucketName,
       });
     }
-  }
-  db = getFirestore();
-  try {
-    bucket = getStorage().bucket();
-  } catch (storageInitErr: any) {
-    console.warn('Firebase Storage bucket initialization failed:', storageInitErr.message || storageInitErr);
-    bucket = null;
+    db = getFirestore();
+    try {
+      bucket = getStorage().bucket();
+    } catch (storageInitErr: any) {
+      console.warn('Firebase Storage bucket initialization failed:', storageInitErr.message || storageInitErr);
+      bucket = null;
+    }
+    console.log('Firebase Admin initialized successfully.');
   }
 } catch (error) {
   console.error('Firebase Admin initialization failed:', error);
+  db = null;
+  bucket = null;
 }
 
 // Helper to upload buffer to Firebase Storage and return public URL
@@ -1774,20 +1782,23 @@ app.post('/api/auth/meta', async (req: Request, res: Response) => {
           }
 
           try {
-            await db.collection('instagram_configs').doc(igAccountId).set(configContent, { merge: true });
+            await db!.collection('instagram_configs').doc(igAccountId).set(configContent, { merge: true });
             console.log(`Saved dynamic page config to Firestore for Instagram account ${igAccountId} (${pageName})`);
           } catch (fsErr) {
             console.error(`Error saving config to Firestore for Instagram account ${igAccountId}:`, fsErr);
           }
 
-          // 5. Subscribe Page (feed comments) and IG account (comments field) to webhooks
-          const { pageSubResult, igSubResult } = await subscribeMetaWebhookFields(
-            pageId,
-            igAccountId,
-            pageAccessToken
-          );
-          console.log(`Auto-subscribed Page ${pageName} (${pageId}) Result:`, pageSubResult);
-          console.log(`Auto-subscribed IG account ${igAccountId} Result:`, igSubResult);
+          try {
+            const { pageSubResult, igSubResult } = await subscribeMetaWebhookFields(
+              pageId,
+              igAccountId,
+              pageAccessToken
+            );
+            console.log(`Auto-subscribed Page ${pageName} (${pageId}) Result:`, pageSubResult);
+            console.log(`Auto-subscribed IG account ${igAccountId} Result:`, igSubResult);
+          } catch (subErr) {
+            console.error(`Webhook subscription failed for ${igAccountId}:`, subErr);
+          }
 
           discoveredConfigs.push(configContent);
         }
@@ -2974,6 +2985,6 @@ async function sendAutomationResponses(
   }
 }
 
-app.listen(PORT, () => {
-  console.log(`Backend server running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Backend server running on port ${PORT}`);
 });
