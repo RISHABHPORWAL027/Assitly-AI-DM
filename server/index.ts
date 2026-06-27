@@ -367,8 +367,42 @@ function mediaIdMatchesAutomation(autoMediaId: string | undefined, webhookMediaI
     autoMediaId === webhookMediaId ||
     (normAuto && normAuto === normWebhook) ||
     autoMediaId === normWebhook ||
-    normAuto === webhookMediaId
+    normAuto === webhookMediaId ||
+    (normAuto && webhookMediaId.includes(normAuto)) ||
+    (normWebhook && autoMediaId.includes(normWebhook))
   );
+}
+
+function findMatchingCommentAutomation(
+  automations: any[],
+  commentText: string,
+  mediaId: string | undefined
+): { matched: any | null; debug: Array<{ name: string; mediaOk: boolean; keywordOk: boolean }> } {
+  const cleanCommentText = commentText.trim().toLowerCase();
+  const activeCommentAutos = automations.filter(
+    (a) => a.triggerType === 'comment' && a.status === 'active'
+  );
+
+  const debug = activeCommentAutos.map((auto) => {
+    const mediaOk = mediaIdMatchesAutomation(auto.mediaId, mediaId);
+    const keywordOk =
+      Array.isArray(auto.keywords) &&
+      (auto.keywords.includes('*') ||
+        auto.keywords.some((k: string) => {
+          const cleanKey = k.trim().toLowerCase();
+          if (auto.matchType === 'exact') return cleanCommentText === cleanKey;
+          return cleanCommentText.includes(cleanKey);
+        }));
+    return { name: auto.name, mediaOk, keywordOk };
+  });
+
+  const matched =
+    activeCommentAutos.find((auto) => {
+      const entry = debug.find((d) => d.name === auto.name);
+      return entry?.mediaOk && entry?.keywordOk;
+    }) || null;
+
+  return { matched, debug };
 }
 
 /** Normalize Instagram `comments` and Page `feed` (item=comment) webhook payloads. */
@@ -383,7 +417,12 @@ function parseCommentWebhookChange(change: { field?: string; value?: any }): Par
     const senderId = value.from?.id;
     const senderUsername =
       value.from?.username || value.from?.name || (senderId ? `ig_user_${senderId}` : 'unknown');
-    const mediaId = value.media?.id || value.media_id || value.post_id;
+    const mediaId =
+      value.media?.id ||
+      value.media_id ||
+      value.post_id ||
+      value.parent_id ||
+      value.post?.id;
     if (!commentId || !commentText || !senderId) return null;
     return { commentId, commentText, senderId, senderUsername, mediaId };
   }
@@ -413,7 +452,7 @@ function buildInstagramMessageBody(recipient: any, message: any, messagingType =
   return body;
 }
 
-/** Page `feed` is subscribed via API — it often does not appear in the Meta dashboard for Instagram-only apps. */
+/** Page `feed` delivers IG comment events. IG `/subscribed_apps?comments` often returns (#3) — that is expected; comments are enabled in App Dashboard. */
 async function subscribeMetaWebhookFields(
   pageId: string,
   igAccountId: string,
@@ -423,11 +462,66 @@ async function subscribeMetaWebhookFields(
   const pageSubResponse = await fetch(pageSubUrl, { method: 'POST' });
   const pageSubResult = await pageSubResponse.json();
 
-  const igSubUrl = `https://graph.facebook.com/v21.0/${igAccountId}/subscribed_apps?subscribed_fields=comments,messages&access_token=${pageAccessToken}`;
+  // Meta often rejects this with (#3) — comment webhooks are configured at app level + page feed, not here.
+  const igSubUrl = `https://graph.facebook.com/v21.0/${igAccountId}/subscribed_apps?subscribed_fields=messages&access_token=${pageAccessToken}`;
   const igSubResponse = await fetch(igSubUrl, { method: 'POST' });
   const igSubResult = await igSubResponse.json();
 
   return { pageSubResult, igSubResult };
+}
+
+function diagnoseCommentWebhooks(input: {
+  pageFields: string[];
+  igFields: string[];
+  pageSubResult: any;
+  igSubResult: any;
+  appSubscriptions: Record<string, unknown> | null;
+  callbackUrl: string | null;
+}): { commentWebhooksLikelyWorking: boolean; issues: string[]; hints: string[] } {
+  const issues: string[] = [];
+  const hints: string[] = [];
+
+  if (!input.callbackUrl) {
+    issues.push('WEBHOOK_CALLBACK_URL is not set on Railway.');
+  }
+
+  if (!input.pageFields.includes('feed')) {
+    issues.push('Facebook Page is not subscribed to the feed field (needed for IG comment events).');
+  }
+
+  const igCommentsApiError = input.igSubResult?.error?.code === 3;
+  if (igCommentsApiError) {
+    hints.push(
+      'IG account API subscription for comments returned (#3) — this is normal. Comments rely on App Dashboard + Page feed + Advanced Access.'
+    );
+  }
+
+  const appIg = input.appSubscriptions?.instagram as { success?: boolean; error?: { message?: string } } | undefined;
+  if (input.appSubscriptions?.error) {
+    issues.push(`App-level webhook registration failed: ${String(input.appSubscriptions.error)}`);
+  } else if (appIg && !appIg.success && appIg.error) {
+    issues.push(`Instagram app-level webhook: ${appIg.error.message || 'failed'}`);
+  }
+
+  issues.push(
+    'Comment webhooks require Meta App Review: Advanced Access for instagram_manage_comments (and related permissions). DMs can work without this — that is why DM automation works but comment automation does not.'
+  );
+
+  hints.push(
+    'In Meta App Dashboard → Webhooks → Instagram, ensure "comments" is subscribed, then click "Test" — you should see RAW WEBHOOK PAYLOAD in Railway logs.'
+  );
+  hints.push(
+    'If Test works but real reel comments do not, your app may still be in Development mode or lack Advanced Access. Switch to Live after App Review, or test with an Instagram account added as App Admin/Developer/Tester.'
+  );
+  hints.push('Try a comment on a regular feed post (not only Reels) to compare behavior.');
+
+  const commentWebhooksLikelyWorking =
+    !!input.callbackUrl &&
+    input.pageFields.includes('feed') &&
+    !input.appSubscriptions?.error &&
+    (appIg?.success === true || input.pageFields.includes('feed'));
+
+  return { commentWebhooksLikelyWorking, issues, hints };
 }
 
 async function getMetaWebhookSubscriptionStatus(
@@ -1930,6 +2024,29 @@ app.post('/api/auth/meta', async (req: Request, res: Response) => {
 });
 
 // Verify / re-apply Page + IG webhook subscriptions (Page `feed` is API-only for many Instagram apps)
+app.post('/api/debug/match-comment', async (req: Request, res: Response) => {
+  const igAccountId = await checkAuthAndGetIgId(req, res);
+  if (!igAccountId) return;
+
+  const commentText = typeof req.body?.commentText === 'string' ? req.body.commentText : '';
+  const mediaId = typeof req.body?.mediaId === 'string' ? req.body.mediaId : undefined;
+  if (!commentText.trim()) {
+    return res.status(400).json({ error: 'commentText is required' });
+  }
+
+  const automations = await loadAutomationsFromFirestore(igAccountId);
+  const { matched, debug } = findMatchingCommentAutomation(automations, commentText, mediaId);
+
+  return res.status(200).json({
+    igAccountId,
+    commentText,
+    mediaId: mediaId || null,
+    matchedAutomation: matched ? { id: matched.id, name: matched.name } : null,
+    checks: debug,
+    activeCommentAutomations: debug.length,
+  });
+});
+
 app.post('/api/meta/sync-webhooks', async (req: Request, res: Response) => {
   const igAccountId = await checkAuthAndGetIgId(req, res);
   if (!igAccountId) return;
@@ -1975,6 +2092,15 @@ app.post('/api/meta/sync-webhooks', async (req: Request, res: Response) => {
       console.log('[Meta] App-level webhook subscription result:', appSubscriptions);
     }
 
+    const diagnosis = diagnoseCommentWebhooks({
+      pageFields,
+      igFields,
+      pageSubResult,
+      igSubResult,
+      appSubscriptions,
+      callbackUrl: callbackUrl || null,
+    });
+
     return res.status(200).json({
       success: true,
       pageId,
@@ -1986,8 +2112,11 @@ app.post('/api/meta/sync-webhooks', async (req: Request, res: Response) => {
       subscribeResults: { page: pageSubResult, ig: igSubResult },
       appSubscriptions,
       callbackUrl: callbackUrl || null,
+      commentWebhooksLikelyWorking: diagnosis.commentWebhooksLikelyWorking,
+      commentWebhookIssues: diagnosis.issues,
+      commentWebhookHints: diagnosis.hints,
       note:
-        'Page feed webhooks are registered via API — they may not appear as a "Page" row in Meta App Dashboard for Instagram Business apps.',
+        'DM webhooks use the messages field. Comment automations need Meta to send comments/feed events — if Railway shows no logs when you comment, Meta is not delivering those events (permissions/App Review), not a bug in your saved automation.',
     });
   } catch (e) {
     console.error('[Meta] sync-webhooks failed:', e);
@@ -2061,50 +2190,44 @@ async function handleIncomingCommentWebhook(
   }
 
   if (!configFound || !accessToken) {
-    console.warn(`[Comment] No config found for recipient ${recipientId}`);
+    if (recipientId === '0') {
+      console.log(
+        '[Comment] Meta Dashboard test webhook (entry.id=0) — comment parser OK. Real comments use your IG account ID (e.g. 17841429199785867) as entry.id.'
+      );
+    } else {
+      console.warn(`[Comment] No config found for recipient ${recipientId}`);
+    }
     return;
   }
 
-  const matchedAuto = automations.find((auto: any) => {
-    if (auto.status !== 'active' || auto.triggerType !== 'comment') return false;
-    const mediaMatches = mediaIdMatchesAutomation(auto.mediaId, mediaId);
+  // Resolve page token + page id (same path as DM webhooks — required for /messages API)
+  if (igAccountId) {
+    const messagingCreds = await getMessagingCredentialsForIgAccount(igAccountId);
+    if (messagingCreds) {
+      accessToken = messagingCreds.accessToken;
+      pageIdForMessaging = messagingCreds.pageId;
+    }
+  }
 
-    const cleanCommentText = commentText.trim().toLowerCase();
-    const keywordMatches =
-      Array.isArray(auto.keywords) &&
-      (auto.keywords.includes('*') ||
-        auto.keywords.some((k: string) => {
-          const cleanKey = k.trim().toLowerCase();
-          if (auto.matchType === 'exact') {
-            return cleanCommentText === cleanKey;
-          }
-          return cleanCommentText.includes(cleanKey);
-        }));
+  if (!pageIdForMessaging) {
+    console.error(`[Comment] Missing Facebook Page ID for IG account ${igAccountId} — cannot send DM reply`);
+    return;
+  }
 
-    return mediaMatches && keywordMatches;
-  });
+  const { matched: matchedAuto, debug: matchDebug } = findMatchingCommentAutomation(
+    automations,
+    commentText,
+    mediaId
+  );
 
   if (!matchedAuto) {
-    const activeCommentAutos = automations.filter(
-      (a) => a.triggerType === 'comment' && a.status === 'active'
-    );
-    for (const auto of activeCommentAutos) {
-      const mediaOk = mediaIdMatchesAutomation(auto.mediaId, mediaId);
-      const cleanCommentText = commentText.trim().toLowerCase();
-      const keywordOk =
-        Array.isArray(auto.keywords) &&
-        (auto.keywords.includes('*') ||
-          auto.keywords.some((k: string) => {
-            const cleanKey = k.trim().toLowerCase();
-            if (auto.matchType === 'exact') return cleanCommentText === cleanKey;
-            return cleanCommentText.includes(cleanKey);
-          }));
+    for (const entry of matchDebug) {
       console.log(
-        `[Comment] Automation "${auto.name}" — media: ${mediaOk ? 'ok' : `no (automation media: ${auto.mediaId || 'all'}, webhook media: ${mediaId})`}, keywords: ${keywordOk ? 'ok' : `no (need ${auto.keywords?.includes('*') ? 'any comment' : auto.keywords?.join('|')}, got "${commentText}")`}`
+        `[Comment] Automation "${entry.name}" — media: ${entry.mediaOk ? 'ok' : 'no'}, keywords: ${entry.keywordOk ? 'ok' : 'no'}`
       );
     }
     console.log(
-      `[Comment] No matching automation for "${commentText}" (media: ${mediaId}, active comment automations: ${activeCommentAutos.length})`
+      `[Comment] No matching automation for "${commentText}" (media: ${mediaId}, active comment automations: ${matchDebug.length})`
     );
     return;
   }

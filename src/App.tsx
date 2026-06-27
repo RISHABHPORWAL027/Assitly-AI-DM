@@ -511,10 +511,12 @@ export default function App() {
         throw new Error(data.error || 'Sync failed');
       }
       const pageOk = data.pageHasFeed ? '✓ feed' : '✗ feed missing';
-      const igOk = data.igHasComments ? '✓ comments' : '✗ comments missing';
+      const igOk = data.igHasComments ? '✓ comments on IG account' : '○ comments (use App Dashboard + Advanced Access)';
       const appOk = data.appSubscriptions && !data.appSubscriptions.error ? '✓ app-level' : '✗ check server logs';
+      const issues = Array.isArray(data.commentWebhookIssues) ? data.commentWebhookIssues.join('\n• ') : '';
+      const hints = Array.isArray(data.commentWebhookHints) ? data.commentWebhookHints.join('\n• ') : '';
       alert(
-        `Webhook sync complete.\n\nPage fields: ${(data.pageFields || []).join(', ') || 'none'} (${pageOk})\nIG fields: ${(data.igFields || []).join(', ') || 'none'} (${igOk})\nApp subscriptions: ${appOk}\nCallback: ${data.callbackUrl || 'set WEBHOOK_CALLBACK_URL in .env'}\n\nIf comments still fail, comment on a reel and look for [Webhook] lines in the backend terminal.`
+        `Webhook sync complete.\n\nPage fields: ${(data.pageFields || []).join(', ') || 'none'} (${pageOk})\nIG fields: ${(data.igFields || []).join(', ') || 'none'} (${igOk})\nApp subscriptions: ${appOk}\nCallback: ${data.callbackUrl || 'set WEBHOOK_CALLBACK_URL on Railway'}\n\nComment webhooks likely working: ${data.commentWebhooksLikelyWorking ? 'maybe (needs Meta test)' : 'NO'}\n\nWhy DM works but comments do not:\n• DMs use the "messages" webhook (you have this)\n• Comments use "comments" / Page "feed" (needs instagram_manage_comments Advanced Access)\n\nIf you comment on a reel and Railway shows NO logs, Meta never sent the webhook.\n\nNext steps:\n• Meta App Dashboard → Webhooks → Instagram → subscribe "comments" → click Test\n• App Review → request Advanced Access for instagram_manage_comments\n• Put app in Live mode after approval\n\n${issues ? `\nIssues:\n• ${issues}` : ''}${hints ? `\n\nHints:\n• ${hints}` : ''}`
       );
     } catch (e) {
       console.error('Webhook sync failed:', e);

@@ -327,8 +327,15 @@ export default function SettingsView({
 
             <div className="rounded-2xl p-5 bg-primary/5 border border-primary/15 space-y-3">
               <p className="text-xs text-on-surface-variant leading-relaxed">
-                <span className="font-semibold text-on-surface">No &quot;Page&quot; row in Meta Dashboard?</span>{' '}
-                That is normal for Instagram Business apps. Page feed (reel comments) is registered automatically via API when you Reconnect or Sync webhooks — you only need Instagram comments toggled in Meta Webhooks.
+                <span className="font-semibold text-on-surface">DM works but reel comments do not?</span>{' '}
+                DMs use the <code className="text-[10px]">messages</code> webhook. Comment automations need Meta to send{' '}
+                <code className="text-[10px]">comments</code> / Page <code className="text-[10px]">feed</code> events — requires{' '}
+                <span className="font-semibold">Advanced Access</span> for{' '}
+                <code className="text-[10px]">instagram_manage_comments</code> (App Review). If Railway shows no logs when you comment, Meta is not sending those events yet.
+              </p>
+              <p className="text-xs text-on-surface-variant leading-relaxed">
+                <span className="font-semibold text-on-surface">Meta Dashboard:</span> Webhooks → Instagram → subscribe{' '}
+                <code className="text-[10px]">comments</code> → click <span className="font-semibold">Test</span> — you should see a webhook hit in Railway logs.
               </p>
               {onSyncWebhooks && isInstagramConnected && (
                 <button
