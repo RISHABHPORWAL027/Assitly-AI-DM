@@ -8,12 +8,17 @@ export interface AuthHeaders {
 
 /**
  * Helper to build the full URL for backend API calls.
- * Reads `VITE_BACKEND_URL` from the environment (injected by Vite).
- * If not set, defaults to the same origin (useful for local dev where Vite proxies to the Express server).
+ * Uses `VITE_BACKEND_URL` when set to a valid http(s) URL; otherwise same-origin `/api`
+ * (Vercel rewrites `/api/*` → Railway — no env var needed in production).
  */
 export function getBackendUrl(path: string): string {
-  const base = import.meta.env.VITE_BACKEND_URL?.replace(/\/*$/, '') || '';
-  return base ? `${base}${path}` : path;
+  const raw = import.meta.env.VITE_BACKEND_URL?.trim().replace(/\/*$/, '') || '';
+  if (!raw) return path;
+  if (!/^https?:\/\//i.test(raw)) {
+    console.warn('[API] Ignoring invalid VITE_BACKEND_URL (must start with http:// or https://):', raw);
+    return path;
+  }
+  return `${raw}${path}`;
 }
 
 function serializeJsonBody(body: unknown): string {

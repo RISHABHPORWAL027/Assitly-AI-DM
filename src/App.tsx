@@ -648,7 +648,7 @@ export default function App() {
       const message = e instanceof Error ? e.message : 'Network error';
       const hint =
         message === 'Failed to fetch'
-          ? 'Could not reach the server. Check your connection, or set VITE_BACKEND_URL on Vercel to your Railway URL.'
+          ? 'Could not reach the backend. On Vercel, remove VITE_BACKEND_URL (the /api proxy works automatically) or set it to https://assitly-ai-dm-production.up.railway.app — then redeploy.'
           : message;
       alert(`Saved locally, but server sync failed.\n\n${hint}`);
     }
