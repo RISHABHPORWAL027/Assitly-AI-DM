@@ -1311,8 +1311,13 @@ async function processAutomationsImagesAsync(automationsList: any[]): Promise<an
               imageUrl = await uploadBufferToFirebaseStorage(buffer, filename, mimeType);
               console.log(`Uploaded card image. Public URL: ${imageUrl}`);
             } catch (storageErr: any) {
-              console.warn('Firebase Storage upload failed, falling back to local filesystem:', storageErr.message || storageErr);
-              // Local filesystem fallback
+              console.warn('Firebase Storage upload failed:', storageErr.message || storageErr);
+              if (process.env.NODE_ENV === 'production') {
+                throw new Error(
+                  'Image upload failed — configure Firebase Storage credentials on the server.'
+                );
+              }
+              // Local filesystem fallback (development only)
               if (!fs.existsSync(uploadsDir)) {
                 fs.mkdirSync(uploadsDir, { recursive: true });
               }
@@ -1344,8 +1349,13 @@ async function processAutomationsImagesAsync(automationsList: any[]): Promise<an
               imageUrl = await uploadBufferToFirebaseStorage(buffer, filename, mimeType);
               console.log(`Uploaded standard image. Public URL: ${imageUrl}`);
             } catch (storageErr: any) {
-              console.warn('Firebase Storage upload failed, falling back to local filesystem:', storageErr.message || storageErr);
-              // Local filesystem fallback
+              console.warn('Firebase Storage upload failed:', storageErr.message || storageErr);
+              if (process.env.NODE_ENV === 'production') {
+                throw new Error(
+                  'Image upload failed — configure Firebase Storage credentials on the server.'
+                );
+              }
+              // Local filesystem fallback (development only)
               if (!fs.existsSync(uploadsDir)) {
                 fs.mkdirSync(uploadsDir, { recursive: true });
               }

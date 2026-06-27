@@ -208,7 +208,7 @@ export default function App() {
 
   // Fetch all user-specific data from server when Instagram is connected
   useEffect(() => {
-    if (!instagramAccountId) return;
+    if (!instagramAccountId || loading || !user) return;
 
     const fetchAllData = async () => {
       try {
@@ -275,7 +275,7 @@ export default function App() {
     // Poll contacts every 10s
     const interval = setInterval(fetchLiveFeed, 10000);
     return () => clearInterval(interval);
-  }, [instagramAccountId]);
+  }, [instagramAccountId, user, loading]);
 
   // Synchronize screen state with URL hash
   useEffect(() => {
@@ -625,14 +625,23 @@ export default function App() {
         const headers = await getAuthHeaders(instagramAccountId);
         const res = await saveAutomation(headers, updatedAuto);
         if (!res.ok) {
-          alert('Saved locally, but server sync failed.');
+          const body = await res.json().catch(() => ({}));
+          const detail = body?.error || `HTTP ${res.status}`;
+          console.error('Automation save failed:', res.status, detail);
+          alert(`Saved locally, but server sync failed.\n\n${detail}`);
         } else {
           bumpAutomationListRefresh();
         }
       } catch (e) {
         console.error('Server sync error:', e);
-        alert('Saved locally, but server sync failed.');
+        alert(
+          `Saved locally, but server sync failed.\n\n${
+            e instanceof Error ? e.message : 'Network error — check Railway is running.'
+          }`
+        );
       }
+    } else {
+      alert('Connect Instagram first — automations need a linked account to sync to the server.');
     }
     setScreen('automations');
   };

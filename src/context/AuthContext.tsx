@@ -78,33 +78,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const getAuthHeaders = async (instagramAccountId?: string): Promise<Record<string, string>> => {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     };
-    
-    // Get live Firebase ID Token if authenticated
-    if (user) {
+
+    const firebaseUser = user ?? auth.currentUser;
+    if (firebaseUser) {
       try {
-        const idToken = await user.getIdToken();
+        const idToken = await firebaseUser.getIdToken();
         headers['Authorization'] = `Bearer ${idToken}`;
       } catch (err) {
         console.error('Error fetching Firebase ID token:', err);
       }
     }
-    
-    // Fallback/direct bearer if ID token couldn't be fetched
-    if (!headers['Authorization']) {
+
+    // Dev-only sandbox fallback (never send IG id as Bearer in production)
+    if (!headers['Authorization'] && !import.meta.env.PROD) {
       const savedIgId = instagramAccountId || localStorage.getItem('assistly_ig_account_id');
       if (savedIgId) {
         headers['Authorization'] = `Bearer ${savedIgId}`;
       }
     }
-    
-    // Attach target Instagram Account ID if specified or saved
+
     const igId = instagramAccountId || localStorage.getItem('assistly_ig_account_id');
     if (igId) {
       headers['X-Instagram-Account-Id'] = igId;
     }
-    
+
     return headers;
   };
 
