@@ -15,6 +15,45 @@ import {
 
 dotenv.config();
 
+/** Prevent processing the same Meta webhook event twice (echo loops / duplicate deliveries). */
+const recentlyProcessedWebhookEvents = new Map<string, number>();
+const WEBHOOK_EVENT_TTL_MS = 10 * 60 * 1000;
+
+function pruneWebhookEventCache(now: number): void {
+  for (const [key, ts] of recentlyProcessedWebhookEvents) {
+    if (now - ts > WEBHOOK_EVENT_TTL_MS) recentlyProcessedWebhookEvents.delete(key);
+  }
+}
+
+function claimWebhookEventKey(key: string): boolean {
+  const now = Date.now();
+  pruneWebhookEventCache(now);
+  if (recentlyProcessedWebhookEvents.has(key)) return false;
+  recentlyProcessedWebhookEvents.set(key, now);
+  return true;
+}
+
+function buildMessagingWebhookDedupeKey(webhookEvent: any): string | null {
+  const mid = webhookEvent.message?.mid || webhookEvent.postback?.mid;
+  if (mid) return `mid:${mid}`;
+  const sender = webhookEvent.sender?.id;
+  const recipient = webhookEvent.recipient?.id;
+  const ts = webhookEvent.timestamp;
+  const text = (webhookEvent.message?.text || webhookEvent.postback?.payload || '').trim();
+  if (sender && recipient && ts) {
+    return `evt:${sender}:${recipient}:${ts}:${text.slice(0, 80)}`;
+  }
+  return null;
+}
+
+function isOutboundMessagingEvent(webhookEvent: any, entryAccountId?: string): boolean {
+  const senderId = webhookEvent.sender?.id;
+  if (!senderId) return true;
+  if (webhookEvent.message?.is_echo) return true;
+  if (entryAccountId && senderId === entryAccountId) return true;
+  return false;
+}
+
 // Initialize Firebase Admin
 let db: Firestore | null = null;
 let bucket: any = null;
@@ -2133,6 +2172,11 @@ async function handleIncomingCommentWebhook(
 
   if (senderId === recipientId) return;
 
+  if (!claimWebhookEventKey(`comment:${commentId}`)) {
+    console.log('[Comment] Skipping duplicate comment event:', commentId);
+    return;
+  }
+
   console.log(
     `Received comment webhook! Comment: "${commentText}" on Media: ${mediaId} from ${senderUsername} (recipient: ${recipientId})`
   );
@@ -2410,20 +2454,39 @@ app.post('/api/webhooks/instagram', async (req: Request, res: Response) => {
 
     // --- HANDLE INCOMING DIRECT MESSAGES (DM Automation & Follow Gate Verification) ---
     if (entry.messaging) {
+        const entryAccountId = entry.id ? String(entry.id) : undefined;
+
         for (const webhookEvent of entry.messaging) {
           const senderId = webhookEvent.sender?.id;
           const recipientId = webhookEvent.recipient?.id;
  
           // Skip if the message was sent by our own bot account or is missing recipient
           if (!recipientId || !senderId) continue;
-          if (senderId === recipientId) {
+          if (senderId === recipientId) continue;
+
+          // Skip outbound/echo/read/delivery — never reply to our own messages or receipts
+          if (webhookEvent.read || webhookEvent.delivery) continue;
+          if (isOutboundMessagingEvent(webhookEvent, entryAccountId)) {
+            console.log('[Webhook] Skipping outbound messaging event from business account');
             continue;
           }
 
+          const dedupeKey = buildMessagingWebhookDedupeKey(webhookEvent);
+          if (dedupeKey && !claimWebhookEventKey(dedupeKey)) {
+            console.log('[Webhook] Skipping duplicate messaging event:', dedupeKey);
+            continue;
+          }
+
+          // Only process user-initiated text, postbacks, or quick replies — ignore attachments-only noise
           const postbackPayload = webhookEvent.postback?.payload;
           const incomingText = webhookEvent.message?.text || '';
+          const quickReplyPayload = webhookEvent.message?.quick_reply?.payload;
+          if (!incomingText && !postbackPayload && !quickReplyPayload) {
+            console.log('[Webhook] Skipping non-text message without postback/quick_reply');
+            continue;
+          }
 
-          // Intercept SEND_MESSAGE button actions
+          // Intercept SEND_MESSAGE button actions (one reply only)
           if (postbackPayload && postbackPayload.startsWith('SEND_MESSAGE:')) {
             const msgToReply = postbackPayload.substring('SEND_MESSAGE:'.length);
             console.log(`Intercepted SEND_MESSAGE button click from ${senderId}. Text: "${msgToReply}"`);
@@ -2461,8 +2524,8 @@ app.post('/api/webhooks/instagram', async (req: Request, res: Response) => {
             continue;
           }
 
-          // Fallback message text is either message body or general postback payload
-          const messageText = incomingText || postbackPayload;
+          // Fallback message text is either message body, postback, or quick-reply payload
+          const messageText = incomingText || postbackPayload || quickReplyPayload || '';
  
           // If it's a valid text/postback message
           if (messageText) {
@@ -2528,6 +2591,31 @@ app.post('/api/webhooks/instagram', async (req: Request, res: Response) => {
             }
 
             if (configFound && accessToken) {
+              // Defense in depth: never reply if sender is the business account
+              if (
+                senderId === igAccountId ||
+                senderId === pageIdForMessaging ||
+                (entryAccountId && senderId === entryAccountId)
+              ) {
+                console.log(`[Webhook] Skipping event sent by business account ${senderId}`);
+                continue;
+              }
+
+              /** Ensures at most ONE outbound reply per inbound webhook event. */
+              let inboundReplySent = false;
+              const sendInboundReplyOnce = async (
+                label: string,
+                sendFn: () => Promise<unknown>
+              ): Promise<boolean> => {
+                if (inboundReplySent) {
+                  console.warn(`[Webhook] Blocked extra reply (${label}) for same inbound event`);
+                  return false;
+                }
+                inboundReplySent = true;
+                await sendFn();
+                return true;
+              };
+
               try {
                 // Fetch profile username
                 let username = `ig_user_${senderId}`;
@@ -2633,16 +2721,18 @@ app.post('/api/webhooks/instagram', async (req: Request, res: Response) => {
                     }
 
                     // Dispatch sequence responses (handling follow gate check automatically)
-                    await sendAutomationResponses(
-                      { id: senderId },
-                      senderId,
-                      accessToken,
-                      matchedAuto,
-                      follows,
-                      igAccountId,
-                      pendingGate.commentId || undefined,
-                      baseUrl,
-                      pageIdForMessaging
+                    await sendInboundReplyOnce('follow-gate complete', () =>
+                      sendAutomationResponses(
+                        { id: senderId },
+                        senderId,
+                        accessToken,
+                        matchedAuto,
+                        follows,
+                        igAccountId,
+                        pendingGate.commentId || undefined,
+                        baseUrl,
+                        pageIdForMessaging
+                      )
                     );
 
                     continue; // skip other rules
@@ -2677,16 +2767,18 @@ app.post('/api/webhooks/instagram', async (req: Request, res: Response) => {
                           }
                         } catch (err) {}
                       }
-                      await sendAutomationResponses(
-                        { id: senderId },
-                        senderId,
-                        accessToken,
-                        keywordAuto,
-                        follows,
-                        igAccountId,
-                        undefined,
-                        baseUrl,
-                        pageIdForMessaging
+                      await sendInboundReplyOnce('lead-gate keyword escape', () =>
+                        sendAutomationResponses(
+                          { id: senderId },
+                          senderId,
+                          accessToken,
+                          keywordAuto,
+                          follows,
+                          igAccountId,
+                          undefined,
+                          baseUrl,
+                          pageIdForMessaging
+                        )
                       );
                       continue;
                     }
@@ -2762,92 +2854,66 @@ app.post('/api/webhooks/instagram', async (req: Request, res: Response) => {
                       } catch (e) {}
                     }
 
-                    await sendInstagramDirectMessage(
-                      accessToken,
-                      senderId,
-                      leadMessages.success,
-                      'Lead Gate Success',
-                      pageIdForMessaging
+                    await sendInboundReplyOnce('lead-gate success', () =>
+                      sendInstagramDirectMessage(
+                        accessToken,
+                        senderId,
+                        leadMessages.success,
+                        'Lead Gate Success',
+                        pageIdForMessaging
+                      )
                     );
 
                     continue; // Skip standard message matching
                   } else {
                     const retryText = leadMessages.invalid || getDefaultLeadInvalidMessage(leadMessages.leadCaptureType);
-                    const sent = await sendInstagramDirectMessage(
-                      accessToken,
-                      senderId,
-                      retryText,
-                      'Lead Gate Invalid',
-                      pageIdForMessaging
-                    );
-                    if (!sent) {
-                      const messagingCreds = await getMessagingCredentialsForIgAccount(igAccountId);
-                      if (messagingCreds && messagingCreds.accessToken !== accessToken) {
-                        await sendInstagramDirectMessage(
-                          messagingCreds.accessToken,
-                          senderId,
-                          retryText,
-                          'Lead Gate Invalid (retry creds)',
-                          messagingCreds.pageId
-                        );
+                    await sendInboundReplyOnce('lead-gate invalid', async () => {
+                      const sent = await sendInstagramDirectMessage(
+                        accessToken,
+                        senderId,
+                        retryText,
+                        'Lead Gate Invalid',
+                        pageIdForMessaging
+                      );
+                      if (!sent) {
+                        const messagingCreds = await getMessagingCredentialsForIgAccount(igAccountId);
+                        if (messagingCreds && messagingCreds.accessToken !== accessToken) {
+                          await sendInstagramDirectMessage(
+                            messagingCreds.accessToken,
+                            senderId,
+                            retryText,
+                            'Lead Gate Invalid (retry creds)',
+                            messagingCreds.pageId
+                          );
+                        }
                       }
-                    }
+                    });
                     continue; // Skip standard message matching
                   }
                 }
 
-                // Determine auto-reply based on user's message
-                let replyText = "Thanks for your message! Our team will get back to you soon. 🤖";
+                // Match against active DM automations — reply ONLY when a rule matches (no generic fallback spam)
+                const matchedRule = findMatchingDmAutomation(automations, messageText);
+                const matchFound = !!matchedRule;
 
-                // Check for matches
-                let matchFound = false;
-                let matchedRule: any = null;
-                for (const auto of automations) {
-                  if (auto.status === 'active' && auto.triggerType === 'dm') {
-                    const cleanMessageText = messageText.trim().toLowerCase();
-                    if (Array.isArray(auto.keywords) && (
-                      auto.keywords.includes('*') || 
-                      auto.keywords.some((k: string) => {
-                        const cleanKey = k.trim().toLowerCase();
-                        if (auto.matchType === 'exact') {
-                          return cleanMessageText === cleanKey;
-                        } else {
-                          return cleanMessageText.includes(cleanKey);
-                        }
-                      })
-                    )) {
-                      matchedRule = auto;
-                      matchFound = true;
-                      break;
-                    }
-                  }
-                }
-
-                if (!matchFound) {
-                  if (lowerText.includes('hey') || lowerText.includes('hello') || lowerText.includes('hi')) {
-                    replyText = "hey hello! Welcome to AssistlyDM. How can I help you automate your business today? 🚀";
-                  }
-                }
-
-                // 2. Lead Capture Check (email / phone number extraction from free-form messages)
+                // Lead capture logging (does not send a message by itself)
                 const ambientLead = validateLeadCapture(messageText, 'either');
-                let leadCaptured = false;
                 let activityAction = '';
                 let activityType = 'chat_bubble';
 
                 if (ambientLead.valid) {
-                  leadCaptured = true;
                   const emailVal = ambientLead.email || '';
                   const phoneVal = ambientLead.phone || '';
                   const detailStr = [
                     emailVal ? `email (${emailVal})` : '',
-                    phoneVal ? `phone (${phoneVal})` : ''
-                  ].filter(Boolean).join(' and ');
-                  
+                    phoneVal ? `phone (${phoneVal})` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' and ');
+
                   activityAction = `Left ${detailStr} via lead capture prompt`;
                   activityType = phoneVal ? 'call' : 'person';
 
-                  // Load and update contacts
                   if (db) {
                     try {
                       let contacts: any[] = [];
@@ -2869,27 +2935,27 @@ app.post('/api/webhooks/instagram', async (req: Request, res: Response) => {
                           dateAdded: 'Today',
                           source: 'Automation',
                           status: 'pending',
-                          revenue: 0
+                          revenue: 0,
                         };
                         contacts.push(contact);
                       }
 
-                      await db.collection('instagram_contacts').doc(igAccountId).set({
-                        contacts: contacts,
-                        updatedAt: FieldValue.serverTimestamp()
-                      }, { merge: true });
+                      await db.collection('instagram_contacts').doc(igAccountId).set(
+                        {
+                          contacts: contacts,
+                          updatedAt: FieldValue.serverTimestamp(),
+                        },
+                        { merge: true }
+                      );
                     } catch (e) {
                       console.error('Failed to read contacts from Firestore:', e);
                     }
                   }
+                } else if (matchFound) {
+                  activityAction = `Triggered automated response for keywords: "${matchedRule!.keywords.join(', ')}"`;
                 } else {
-                  if (matchFound) {
-                    activityAction = `Triggered automated response for keywords: "${matchedRule.keywords.join(', ')}"`;
-                    activityType = 'chat_bubble';
-                  } else {
-                    activityAction = `Sent message: "${messageText.length > 50 ? messageText.substring(0, 47) + '...' : messageText}"`;
-                    activityType = 'flag';
-                  }
+                  activityAction = `Received message: "${messageText.length > 50 ? messageText.substring(0, 47) + '...' : messageText}" (no automation match — no reply sent)`;
+                  activityType = 'flag';
                 }
 
                 // 3. Log Activity
@@ -2919,11 +2985,11 @@ app.post('/api/webhooks/instagram', async (req: Request, res: Response) => {
                   } catch (e) {}
                 }
 
-                // 4. Send the auto-reply back
+                // Send at most one automation response per inbound message
                 if (matchFound) {
                   let follows = true;
-                  const hasFollowBlock = Array.isArray(matchedRule.responses) && matchedRule.responses.some((r: any) => r.type === 'follow');
-                  const followGateEnabled = matchedRule.enableFollowGate || hasFollowBlock;
+                  const hasFollowBlock = Array.isArray(matchedRule!.responses) && matchedRule!.responses.some((r: any) => r.type === 'follow');
+                  const followGateEnabled = matchedRule!.enableFollowGate || hasFollowBlock;
 
                   if (followGateEnabled) {
                     if (senderId && senderId.includes('mock_nonfollower')) {
@@ -2941,24 +3007,22 @@ app.post('/api/webhooks/instagram', async (req: Request, res: Response) => {
                     }
                   }
 
-                  await sendAutomationResponses(
-                    { id: senderId },
-                    senderId,
-                    accessToken,
-                    matchedRule,
-                    follows,
-                    igAccountId,
-                    undefined,
-                    baseUrl,
-                    pageIdForMessaging
+                  await sendInboundReplyOnce('dm automation match', () =>
+                    sendAutomationResponses(
+                      { id: senderId },
+                      senderId,
+                      accessToken,
+                      matchedRule!,
+                      follows,
+                      igAccountId,
+                      undefined,
+                      baseUrl,
+                      pageIdForMessaging
+                    )
                   );
                 } else {
-                  await sendInstagramDirectMessage(
-                    accessToken,
-                    senderId,
-                    replyText,
-                    'Default DM reply',
-                    pageIdForMessaging
+                  console.log(
+                    `[Webhook] No active DM automation matched for "${messageText.slice(0, 40)}" — no reply sent`
                   );
                 }
               } catch (error) {
